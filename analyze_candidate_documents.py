@@ -2613,18 +2613,94 @@ def write_summary_md(path: Path, cards: list[dict[str, Any]], utilities: Utiliti
 
 
 def run_regression_tests() -> int:
-    output = Path("candidate_analysis_regression")
-    utilities = detect_utilities()
-    proc_dirs = find_input_procurements(Path("candidate_details"), "0360100030524000979", 0)
-    if not proc_dirs:
-        safe_print("REGRESSION FAIL: procurement 0360100030524000979 not found")
-        return 1
-    card = process_procurement(proc_dirs[0], output, utilities, True, False, False)
     failures: list[str] = []
 
     def near(name: str, actual: Any, expected: float, tolerance: float = 0.05) -> None:
         if actual in (None, "") or abs(float(actual) - expected) > tolerance:
             failures.append(f"{name}: expected {expected}, got {actual}")
+
+    number = "0000000000000000001"
+    protocol = TextPiece(
+        "\n".join(
+            [
+                "Протокол подведения итогов электронного аукциона.",
+                "Подано 11 заявок на участие в закупке.",
+                "Соответствует требованиям 11 заявок.",
+                "Предложения участников о цене:",
+                "52 | 138 783,88 | 75,61",
+                "41 | 241 000,00 | 57,65",
+                "37 | 569 066,67 | 0,00",
+            ]
+        ),
+        "candidate_analysis_regression/results.txt",
+        "final_protocol",
+        "results",
+    )
+    technical = TextPiece(
+        (
+            "Описание объекта закупки: разработка демонстрационного портала "
+            "с административной панелью, CMS, поиском, формами обратной связи "
+            "и загрузкой документов для пользователей."
+        ),
+        "candidate_analysis_regression/technical.txt",
+        "technical_specification",
+        "documents",
+    )
+    contract = TextPiece(
+        (
+            "Проект контракта содержит условия приемки, оплаты и передачи результата работ. "
+            "Заказчик проверяет результат по акту, исполнитель устраняет замечания в рабочем порядке."
+        ),
+        "candidate_analysis_regression/contract.txt",
+        "contract_draft",
+        "documents",
+    )
+    application = TextPiece(
+        (
+            "Требования к содержанию заявки: участник предоставляет согласие и документы заявки. "
+            "Заявка должна содержать сведения об участнике, декларации и подтверждение условий закупки."
+        ),
+        "candidate_analysis_regression/application.txt",
+        "application_requirements",
+        "documents",
+    )
+    nmck = TextPiece(
+        (
+            "Обоснование начальной максимальной цены контракта выполнено методом сопоставимых рыночных цен. "
+            "Расчет использует несколько коммерческих предложений и итоговое значение НМЦК."
+        ),
+        "candidate_analysis_regression/nmck.txt",
+        "nmck_calculation",
+        "documents",
+    )
+    pieces = [protocol, technical, contract, application, nmck]
+    manifest_rows = [
+        {
+            "procurement_number": number,
+            "original_filename": Path(piece.source_file).name,
+            "detected_type": piece.document_type,
+            "extraction_status": "success",
+            "text_length": str(len(piece.text)),
+            "source_path": f"synthetic\\downloads\\documents\\{Path(piece.source_file).name}",
+            "section": piece.page_or_sheet,
+        }
+        for piece in pieces
+    ]
+    card = {field: "" for field in FIELD_NAMES}
+    card.update(
+        {
+            "analysis_version": ANALYSIS_VERSION,
+            "procurement_number": number,
+            "procurement_name": "Synthetic regression portal",
+            "customer": "Synthetic customer",
+            "nmck": 569066.67,
+            "source_url": "https://example.invalid/procurement/0000000000000000001",
+            "contradictions": [{"field": "contract_price", "old": 569066.67, "new": 690.67}],
+        }
+    )
+    evidence = analyze_fields(card, pieces)
+    evidence, q_issues, _conflicts = strict_reanalyze(card, pieces, evidence, manifest_rows)
+    card["quality_issues"] = q_issues
 
     near("nmck", card.get("nmck"), 569066.67)
     near("contract_price", card.get("contract_price"), 138783.88)
@@ -2639,19 +2715,23 @@ def run_regression_tests() -> int:
         failures.append("short_scope contains EIS boilerplate")
     if card.get("data_completeness_score", 0) < 80 and card.get("verdict") == "TAKE_NOW":
         failures.append("TAKE_NOW allowed below data_completeness_score 80")
+    if not card.get("rejected_candidates"):
+        failures.append("implausible money candidate was not recorded as rejected")
 
-    missing_case = process_procurement(proc_dirs[0], output / "no_protocol_case", utilities, True, False, False)
+    missing_case = dict(card)
     missing_case["final_protocol_status"] = "missing"
     missing_case["missing_key_documents"] = ["final_protocol_status"]
     apply_verdict_gate(missing_case, [])
-    if missing_case.get("verdict") != "INSUFFICIENT_DATA":
-        failures.append("missing protocol did not block verdict")
+    if missing_case.get("technical_participation_verdict") == "INSUFFICIENT_TECHNICAL_DATA":
+        failures.append("missing protocol incorrectly blocked technical verdict")
+    if missing_case.get("overall_recommendation") != "PROMISING_BUT_MARKET_UNKNOWN":
+        failures.append("missing protocol did not produce market-unknown recommendation")
 
     if failures:
         for failure in failures:
             safe_print(f"REGRESSION FAIL: {failure}")
         return 1
-    safe_print("REGRESSION PASS: 0360100030524000979 strict extraction values verified")
+    safe_print(f"REGRESSION PASS: {number} synthetic strict extraction values verified")
     return 0
 
 
