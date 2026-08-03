@@ -1,0 +1,4 @@
+procurement_number,severity,field,message
+0000000000000000001,low,support_period,Exact support period is not stated in the synthetic technical excerpt and should be confirmed manually.
+0000000000000000001,medium,application_requirements_status,Application requirements were classified with medium confidence because the synthetic example only includes a short excerpt.
+0000000000000000001,low,hosting_requirements,Hosting requirements are mentioned as customer-provided but the exact environment is unresolved.

@@ -1,0 +1,5 @@
+procurement_number,field_name,reason
+0000000000000000001,support_period,not found in extracted evidence
+0000000000000000001,payment_period_days,not found in extracted evidence
+0000000000000000001,hosting_requirements,not found in extracted evidence
+0000000000000000001,training_required,not found in extracted evidence

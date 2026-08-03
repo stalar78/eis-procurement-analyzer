@@ -1,0 +1,2 @@
+procurement_number,field,old,new
+0000000000000000001,acceptance_period_days,10 calendar days in synthetic notice summary,7 business days in synthetic contract draft

@@ -1,0 +1,6 @@
+procurement_number,original_filename,source_section,extraction_status,text_length,detected_type,classification_score,classifier_confidence,classification_reasons,alternative_types,used_as_key_document,key_document_role
+0000000000000000001,synthetic_technical_specification.docx,documents,success,1840,technical_specification,9,high,"[""filename contains technical specification"", ""text contains portal scope and functional requirements""]","[""other""]",True,technical
+0000000000000000001,synthetic_contract_draft.docx,documents,success,1320,contract_draft,8,high,"[""filename contains contract draft"", ""text contains acceptance and payment clauses""]","[""notice""]",True,contract
+0000000000000000001,synthetic_application_requirements.docx,documents,success,960,application_requirements,7,medium,"[""filename contains application requirements"", ""text contains participant declaration rules""]","[""notice""]",True,application_requirements
+0000000000000000001,synthetic_nmck_calculation.xlsx,documents,success,780,nmck_calculation,8,high,"[""spreadsheet with nmck context"", ""text contains comparable price method""]","[""other""]",True,nmck
+0000000000000000001,synthetic_final_protocol.pdf,results,success,1120,final_protocol,9,high,"[""section is results"", ""text contains price offers and participant count""]","[""notice""]",True,protocol
