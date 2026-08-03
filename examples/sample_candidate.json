@@ -1,0 +1,14 @@
+{
+  "procurement_number": "0000000000000000001",
+  "object_name": "Development of a demonstration municipal service portal",
+  "customer": "Example Public Customer",
+  "law": "44-FZ",
+  "procedure": "Electronic auction",
+  "status": "Published",
+  "initial_price": "650000.00",
+  "initial_price_value": 650000.0,
+  "published_date": "2026-01-15",
+  "deadline_date": "2026-02-01",
+  "card_url": "https://example.invalid/procurement/0000000000000000001",
+  "why_selected": "Synthetic portfolio example for a CMS portal with forms and search"
+}

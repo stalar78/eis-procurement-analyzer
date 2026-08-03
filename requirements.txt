@@ -1,0 +1,8 @@
+openpyxl
+playwright
+requests
+python-docx
+PyMuPDF
+pypdf
+striprtf
+xlrd

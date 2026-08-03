@@ -1,0 +1,21 @@
+* text=auto
+*.py text eol=lf
+*.md text eol=lf
+*.txt text eol=lf
+*.json text eol=lf
+*.csv text eol=lf
+*.yml text eol=lf
+*.yaml text eol=lf
+
+*.xlsx binary
+*.xls binary
+*.xlsm binary
+*.ods binary
+*.doc binary
+*.docx binary
+*.pdf binary
+*.zip binary
+*.rar binary
+*.7z binary
+*.bin binary
+*.sig binary
