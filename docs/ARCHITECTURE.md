@@ -2,180 +2,206 @@
 
 ## Purpose
 
-EIS Procurement Analyzer is organized as a local multi-stage pipeline. Each stage produces explicit files that can be inspected, resumed, or passed to the next stage.
+EIS Procurement Analyzer now contains two cooperating layers:
 
-The project does not require a database or web service in its current form.
+1. the original local document-analysis pipeline;
+2. EIS Procurement Radar, a stateful orchestration layer for live discovery, historical competition intelligence, selective enrichment, and manual decision support.
 
-## High-level flow
+The Radar uses SQLite for local state and caching but does not require a web service or external database server.
+
+## High-level architecture
 
 ```text
-Public EIS search pages
-    -> collect_results.py
-    -> local search datasets and checkpoints
-    -> score_results.py
-    -> ranked candidate dataset
-    -> collect_candidate_details.py
-    -> page captures, links, download manifest, documents
-    -> analyze_candidate_documents.py
-    -> extracted content, classifications, evidence, scores, reports
+Public EIS
+    |
+    +--> live search/discovery
+    |      -> status/deadline normalization
+    |      -> open verification
+    |      -> preliminary scoring
+    |
+    +--> completed-procurement search
+    |      -> historical candidate discovery
+    |      -> category/similarity selection
+    |      -> result/protocol extraction
+    |      -> competition metrics
+    |
+    +--> selected live procurement
+           -> controlled document collection
+           -> artifact registry
+           -> document analyzer
+           -> deep assessment
+
+All stages
+    -> SQLite state/cache
+    -> structured reports
+    -> manual review
 ```
 
-## 1. Search collection
+## 1. Legacy collection and analyzer entry points
 
-`collect_results.py` uses Playwright to open search-result pages and collect procurement cards.
+The existing scripts remain usable independently:
 
-Responsibilities:
+- `collect_results.py` — EIS search-result collection;
+- `score_results.py` — lightweight ranking;
+- `collect_candidate_details.py` — procurement section traversal and document collection;
+- `analyze_candidate_documents.py` — extraction, classification, evidence, technical/market assessment, and reports.
 
-- open the configured public search URL;
-- move through result pages;
-- apply conservative delays and retry behavior;
-- extract procurement metadata and source text;
-- preserve the search query that found each record;
-- deduplicate records;
-- save checkpoints for partial recovery;
-- export local CSV, XLSX, and JSON datasets.
+Radar reuses these layers through importable compatibility APIs rather than duplicating document-collection and analysis logic.
 
-The collector depends on the current external page structure. Selectors and navigation logic may require maintenance when EIS changes.
+## 2. Radar orchestration
 
-## 2. Initial scoring
+`radar.runner` is the CLI/orchestration entry point.
 
-`score_results.py` performs lightweight rule-based classification over the collected search dataset.
+Its responsibilities include:
 
-It is intended to distinguish likely development or modernization work from licenses, equipment, education, access to ready-made software, and unrelated results.
+- configuration and profile loading;
+- discovery mode selection;
+- card/state handling;
+- provisional assessment;
+- optional historical intelligence;
+- optional document enrichment;
+- transactional reporting.
 
-This stage narrows the research set. It does not replace detailed document analysis.
+The current Radar version is exposed from `radar.__init__`.
 
-## 3. Candidate traversal and downloads
+## 3. Live discovery
 
-`collect_candidate_details.py` opens selected procurement cards and traverses available sections such as general information, documents, results, events, contracts, protocols, and clarifications.
+Main modules:
 
-It records page text, HTML, discovered links, section metadata, and processing logs.
+- `radar.discovery`
+- `radar.search_request`
+- `radar.search_profiles`
+- `radar.open_verification`
+- `radar.prefilter`
+- `radar.scoring`
 
-The download layer uses defensive checks:
+Discovery builds explicit EIS search requests, preserves filters during pagination, normalizes status/deadline evidence, deduplicates cards, and optionally verifies the current open state from the procurement detail page.
 
-- Playwright browser context;
-- request/API context where applicable;
-- cookies and request headers from the browser session;
-- redirects;
-- `requests` fallback;
-- retries for transient statuses;
-- `Content-Type` inspection;
-- `Content-Disposition` filename extraction;
-- file-extension inference;
-- rejection of HTML responses presented as attachments;
-- a download manifest containing URL, status, type, size, and error details.
+Query/page/card budgets prevent uncontrolled crawling.
 
-No access boundary is bypassed. The current design is for publicly available material.
+## 4. State
 
-## 4. Document extraction
+`radar.state` provides SQLite-backed local state for runs, procurement observations, assessments, enrichment state, historical state, artifacts, and recovery metadata.
 
-`analyze_candidate_documents.py` processes the downloaded local corpus.
+State supports:
 
-Supported paths include:
+- new/changed detection;
+- cache reuse;
+- resumable workflows;
+- version-aware analysis reuse;
+- last-known-good source information.
 
-- DOCX and DOC;
-- PDF;
-- XLSX and XLS;
-- ZIP and RAR;
-- RTF;
-- TXT;
-- HTML;
-- selected binary fallbacks.
+The SQLite database is runtime data and is excluded from Git.
 
-Extraction may use optional local tools such as LibreOffice, 7-Zip, `unrar`, or `antiword`. Missing tools reduce extraction coverage but should not silently convert an unreadable file into a missing file.
+## 5. Historical intelligence
 
-Archives are handled through dedicated extraction paths. The analyzer records extraction status and quality information for each source.
+Main modules:
 
-## 5. Document classification
+- `radar.historical`
+- `radar.analog_search`
+- `radar.competition_metrics`
+- `radar.customer_history`
+- `radar.supplier_history`
+- `radar.dumping_risk`
+- `radar.result_extraction`
+- `radar.historical_live_validation`
 
-Documents are classified using multiple signals:
+The historical flow searches bounded sets of completed procurements, scores category/similarity compatibility, resolves public result/protocol evidence, assembles usable result fields, and calculates competition metrics with explicit confidence.
 
-- filename;
-- procurement-card section;
-- extracted text;
-- stable phrases;
-- score-based rules.
+Historical assessments are stored separately from preliminary and deep assessments.
 
-Current categories include technical specifications, technical attachments, contract drafts, signed contracts, NMCK calculations, application requirements, information cards, clarifications, protocols, notices, bank details, signatures, and other files.
+## 6. Analog selection
 
-The result is written to `document_classification.csv` and used by strict extraction rules.
+`radar.analog_search` performs source-aware query and similarity work.
 
-## 6. Strict extraction and evidence
+Important design properties:
 
-Important fields are extracted only from allowed document types.
+- Russian text normalization and mojibake repair;
+- source-specific functional terms;
+- term-importance weighting;
+- category compatibility before relaxed similarity;
+- explicit score components;
+- bounded fallback selection modes.
 
-Examples:
+The objective is to prefer no sample over an irrelevant sample.
 
-- final price from a final protocol or signed contract;
-- participant count from a protocol;
-- functionality from technical specifications and clarifications;
-- application requirements from the corresponding requirements or information card;
-- acceptance and rights from contract and technical documents.
+## 7. Historical result extraction
 
-Every important accepted value can be accompanied by evidence metadata:
+`radar.result_extraction` handles 44-FZ and 223-FZ public result/protocol paths separately.
 
-- source file;
-- document type;
-- page, sheet, or cell reference where available;
-- excerpt;
-- extraction method;
-- confidence.
+Competition fields may be assembled from multiple pages/documents for one procurement. Field provenance is retained.
 
-Unsupported candidates can be rejected rather than promoted to final values.
+Partial results can contribute independently to participant, reduction, and winner samples rather than requiring one fully complete analog record.
 
-## 7. Decision model
+## 8. Live enrichment
 
-The analyzer keeps technical feasibility separate from market evidence.
+Main modules:
 
-Main layers:
+- `radar.enrichment`
+- `radar.live_collection`
+- `radar.artifact_registry`
+- `radar.deep_assessment`
 
-- `technical_participation_verdict`;
-- `market_result_status`;
-- `overall_recommendation`.
+Enrichment selects bounded live candidates, traverses procurement sections, validates downloads, registers artifacts, invokes the existing document analyzer, and maps its structured result into a deep Radar assessment.
 
-This prevents a technically feasible scope from being treated as economically attractive when protocols are missing, contradictory, or show extreme price reduction.
+## 9. Source resilience
 
-Scores and verdicts are heuristic. They are inputs to manual review, not automatic participation decisions.
+`radar.source_resolution` handles unstable EIS URLs using bounded strategies such as:
 
-## 8. Reporting
+- supplied URL;
+- last-known-good URL;
+- exact-number search recovery;
+- alternate-section recovery;
+- cached source snapshots.
 
-The final stage writes structured outputs for different review tasks:
+A single failed request is not treated as definitive disappearance when other evidence exists.
 
-- consolidated workbook;
-- CSV and JSON exports;
-- document and extraction manifests;
-- evidence index;
-- unresolved fields;
-- quality issues;
-- field conflicts;
-- rejected candidates;
-- Markdown summary;
-- per-procurement extracted material.
+## 10. Reporting
 
-Generated outputs and real downloaded documents are deliberately ignored by Git and must remain local.
+`radar.reporting` writes structured JSON/CSV/XLSX/Markdown outputs for discovery, assessments, historical metrics, enrichment, and diagnostics.
 
-## Source-dependent and reusable layers
+Real-run publication is transactional: per-run artifacts are created first, then `latest.*` is updated only according to run-quality rules. `latest_attempt.json` can preserve the most recent attempt independently from the latest publishable result.
 
-The current code is EIS-specific, but its responsibilities can be viewed in two groups.
+## 11. Original document extraction
 
-### Source-dependent
+`analyze_candidate_documents.py` continues to handle local procurement corpora.
 
-- navigation and selectors;
-- pagination;
-- card structure;
-- section URLs;
-- attachment discovery;
-- source-specific request behavior.
+Supported paths include DOCX/DOC, PDF, XLSX/XLS, ZIP/RAR, RTF, TXT, HTML, and selected binary fallbacks. Optional local utilities may improve legacy-format coverage.
 
-### Reusable analytical concepts
+Document classification and strict extraction continue to enforce allowed-source rules for important facts and financial values.
 
-- local document storage;
-- format detection;
-- text and table extraction;
-- document classification;
-- evidence records;
-- conflict detection;
-- quality states;
-- scoring and reporting.
+## 12. Source-dependent vs reusable layers
 
-Supporting another source would require separate analysis and implementation. The repository does not currently claim universal connector support.
+Source-dependent responsibilities include:
+
+- EIS search parameters and selectors;
+- card/section navigation;
+- result/protocol layout handling;
+- attachment discovery and request behavior.
+
+Reusable analytical concepts include:
+
+- artifact hashing and manifests;
+- document extraction/classification;
+- evidence provenance;
+- conflict/quality states;
+- similarity components;
+- competition aggregation;
+- scoring and reporting;
+- stateful cache/resume patterns.
+
+Supporting another procurement source would require a new source adapter and validation. The repository does not claim universal connector support.
+
+## 13. Repository boundary
+
+The public repository contains source code, configuration examples, tests, and synthetic/test-oriented fixtures.
+
+The following remain local runtime data:
+
+- live procurement documents;
+- EIS HTML snapshots;
+- result/protocol downloads;
+- SQLite state;
+- generated reports;
+- browser authentication/storage state;
+- caches and temporary run directories.
