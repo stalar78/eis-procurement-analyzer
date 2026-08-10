@@ -2,11 +2,11 @@
 
 ## Purpose
 
-The analyzer is built around a conservative rule:
+The project is built around a conservative rule:
 
 > A missing value is preferable to a confident-looking value that cannot be supported by an allowed source.
 
-The system therefore separates extraction, validation, evidence, quality state, and decision support.
+That rule applies both to the original document analyzer and to EIS Procurement Radar. Extraction, validation, evidence, confidence, and decision support remain separate layers.
 
 ## 1. Document status
 
@@ -17,28 +17,13 @@ The analyzer distinguishes several situations that must not be collapsed into on
 - `unreadable` — the document exists but could not be read reliably;
 - `missing` — no acceptable document of the required type was found.
 
-This distinction is important. An unreadable contract is not evidence that no contract exists.
+An unreadable contract is not evidence that no contract exists.
 
 ## 2. Document classification
 
 Classification uses filename, card section, extracted text, stable phrases, and score-based rules.
 
-Typical classes include:
-
-- `technical_specification`;
-- `technical_attachment`;
-- `contract_draft`;
-- `signed_contract`;
-- `nmck_calculation`;
-- `application_requirements`;
-- `information_card`;
-- `clarification`;
-- `final_protocol`;
-- `auction_protocol`;
-- `notice`;
-- `bank_details`;
-- `signature`;
-- `other`.
+Typical classes include technical specifications, technical attachments, contract drafts, signed contracts, NMCK calculations, application requirements, information cards, clarifications, protocols, notices, signatures, and other files.
 
 Classification controls which documents are allowed to support particular fields.
 
@@ -46,87 +31,161 @@ Classification controls which documents are allowed to support particular fields
 
 Important values are not accepted from arbitrary text matches.
 
-Examples of source restrictions:
-
 | Field | Preferred or allowed source |
 |---|---|
 | Initial maximum contract price | NMCK calculation, procurement card, or notice |
-| Final contract price | Final protocol or signed contract |
-| Participant count | Protocol |
+| Final contract price | Final protocol, supported structured result, or signed/concluded contract evidence |
+| Participant count | Protocol or supported structured result |
 | Functional scope | Technical specification and clarification |
 | Participant requirements | Application requirements or information card |
 | Acceptance and rights | Contract draft, signed contract, and technical specification |
 
-The exact code rules remain the source of truth. This table explains the principle rather than replacing implementation details.
+The exact code rules remain the source of truth.
 
 ## 4. Strict financial extraction
 
-Financial documents often contain many unrelated amounts: guarantees, taxes, penalties, line-item values, reference prices, and formatting artifacts.
+Financial documents often contain unrelated amounts: guarantees, taxes, penalties, line-item values, reference prices, application identifiers, percentages, and formatting artifacts.
 
 The strict extraction layer therefore:
 
-1. checks the document class;
+1. checks the source/document class;
 2. looks for context-specific patterns;
 3. rejects unsupported candidates;
 4. records accepted evidence;
-5. records unresolved or rejected candidates separately;
+5. records unresolved/rejected candidates separately;
 6. detects contradictory accepted values instead of choosing silently.
 
-Regression tests cover cases where a small unrelated number must not replace a contract price.
+Reduction is calculated only from a supported NMCK and supported final price when the relationship is valid.
 
 ## 5. Evidence model
 
-An accepted field can be linked to an evidence record containing:
+An accepted field can be linked to evidence metadata containing:
 
 - procurement identifier;
-- field name;
-- accepted value;
-- source file;
-- source document class;
-- page, sheet, cell, or text location where available;
-- source excerpt;
+- field name and accepted value;
+- source page/document;
+- document/result class;
+- page, sheet, row, cell, or text location where available;
+- excerpt or structured source context;
 - extraction method;
-- confidence or reliability information.
+- confidence/reliability information.
 
-Evidence is intended to make manual verification possible. It is not a guarantee that the source document itself is legally sufficient.
+Evidence makes manual verification possible. It is not a guarantee that the source is legally sufficient for every use.
 
 ## 6. Conflicts and unresolved values
 
-When allowed sources disagree, the analyzer can record a field conflict rather than selecting one value without disclosure.
+When allowed sources disagree, the system can record a field conflict rather than selecting one value without disclosure.
 
 When no acceptable evidence exists, the field remains unresolved.
 
-Related outputs include:
+Missing data should not be transformed into a negative business conclusion merely because it is missing.
 
-- `field_conflicts.csv`;
-- `unresolved_fields.csv`;
-- `rejected_candidates.csv`;
-- `quality_issues.csv`.
+## 7. Radar open-procedure methodology
 
-The audited development dataset did not confirm a current technical-specification/clarification conflict, so that result is not presented as a verified project metric.
+For live participation screening, a procurement should not be considered open solely because of a keyword in the search card.
 
-## 7. Data completeness and reliability
+Radar separates:
 
-The decision model considers whether critical document groups were found and read.
+- raw EIS status;
+- normalized status;
+- future/past application deadline;
+- cancellation/completion signals;
+- optional detail-page verification.
 
-A high completeness score does not make a heuristic recommendation legally binding. It only indicates that more of the expected evidence was available to the model.
+A status/deadline conflict blocks automatic promotion into the enrichment path unless explicitly forced for diagnostic purposes.
 
-Reliability should fall when:
+## 8. Historical analog methodology
 
-- critical documents are missing;
-- files are unreadable or only partially extracted;
-- important fields remain unresolved;
-- sources conflict;
-- market protocols are unavailable;
-- an extreme price reduction needs manual review.
+Historical analogs are selected through explainable rule-based features rather than opaque semantic scoring.
 
-## 8. Separate decision layers
+The model considers source-aware functional/title terms, category compatibility, customer, procedure type, budget relationship, region, and profile/category evidence.
 
-### Technical participation verdict
+Category mismatches can reject candidates before relaxed thresholds are applied.
 
-Describes whether the documented technical scope appears suitable under the current heuristic model.
+Threshold relaxation is explicit and bounded. The objective is not to force a minimum number of analogs.
 
-Possible values include:
+## 9. Historical result methodology
+
+Competition evidence may be distributed across several EIS result/protocol pages.
+
+The result layer can assemble fields from multiple sources belonging to one procurement. Each field retains its own provenance.
+
+A partial analog can remain useful:
+
+- participant evidence can enter participant metrics without a final price;
+- final-price evidence can enter reduction metrics without participant data;
+- winner evidence has its own sample.
+
+This avoids an all-or-nothing completeness rule.
+
+## 10. Competition metrics
+
+Where sufficient evidence exists, Radar can calculate:
+
+- median/average participants;
+- participant quartiles and maximum;
+- median/average reduction;
+- reduction quartiles and maximum;
+- high/extreme/severe reduction rates;
+- no-application and all-rejected rates;
+- repeated-winner signal.
+
+Medians are preferred as primary market descriptors when outliers are likely.
+
+Each metric should retain its contributing sample and sample size.
+
+## 11. Historical confidence
+
+Historical confidence depends on evidence quantity and quality, not only on whether a numerical score exists.
+
+Factors include:
+
+- usable sample size;
+- strong analog count;
+- similarity quality;
+- field completeness;
+- protocol/result provenance;
+- consistency of observed values.
+
+A small sample should remain `LOW` or `INSUFFICIENT` even when a risk score can technically be calculated.
+
+## 12. Dumping/competition risk
+
+Large reductions are not automatically interpreted as wrongdoing. The model describes observed market competition and price reduction patterns.
+
+Risk levels such as `LOW`, `MODERATE`, `HIGH`, `EXTREME`, or `UNKNOWN` are decision-support categories, not probabilities.
+
+Historical competition should not be described as an exact winning-price forecast.
+
+## 13. Separate decision layers
+
+The project keeps different questions separate.
+
+### Preliminary Radar assessment
+
+Card-level eligibility and fit produce decisions such as:
+
+- `PRIORITY`;
+- `REVIEW`;
+- `WATCH`;
+- `REJECT`;
+- `INSUFFICIENT_DATA`.
+
+### Open verification
+
+Checks whether the procedure is actually available for participation.
+
+### Historical assessment
+
+Evaluates comparable completed procurements and competition evidence.
+
+### History-adjusted assessment
+
+Applies a bounded historical adjustment while preserving the original preliminary score/decision. Insufficient historical data does not automatically create `REJECT`.
+
+### Deep technical assessment
+
+Document enrichment can produce technical verdicts such as:
 
 - `TAKE_NOW`;
 - `TAKE_WITH_CONDITIONS`;
@@ -134,70 +193,39 @@ Possible values include:
 - `DO_NOT_TAKE`;
 - `INSUFFICIENT_TECHNICAL_DATA`.
 
-### Market result status
+### Market/document result status
 
-Describes the availability and quality of market-result evidence.
+The analyzer separately tracks whether protocol/result data is complete, partial, unreadable, missing, conflicting, or requires manual review.
 
-Possible values include:
+### Final recommendation
 
-- `FULL_RESULT_AVAILABLE`;
-- `PARTIAL_RESULT_AVAILABLE`;
-- `PROTOCOL_NOT_AVAILABLE`;
-- `PROTOCOL_UNREADABLE`;
-- `EXTREME_REDUCTION_REVIEW_REQUIRED`;
-- `RESULT_CONFLICT`.
+The final recommendation remains a manual-review priority, not an automated participation decision.
 
-### Overall recommendation
+## 14. Price recommendations
 
-Combines available technical and market signals into a priority for manual review.
+The analyzer can calculate heuristic minimum/comfortable price fields from extracted scope and configured assumptions.
 
-Possible values include:
+These are model estimates, not quotations, guarantees, or professional financial advice. Operational use still requires manual confirmation of labour, taxes, guarantees/security, infrastructure, support, legal terms, subcontracting, reserves, and organization-specific costs.
 
-- `PRIORITY_REVIEW`;
-- `PROMISING`;
-- `PROMISING_BUT_MARKET_UNKNOWN`;
-- `PREPARE_FIRST`;
-- `LOW_PRIORITY`;
-- `REJECT`;
-- `INSUFFICIENT_DATA`.
+## 15. Resilience methodology
 
-The exact gates are implemented in code and covered by regression tests.
+External EIS availability is treated as uncertain.
 
-## 9. Price recommendations
+One failed URL is not definitive proof of absence when search recovery, alternate sections, or last-known-good cached evidence exist.
 
-The analyzer can calculate heuristic minimum and comfortable price fields.
+Cached evidence must be marked as cached/stale rather than presented as freshly retrieved.
 
-These values are model estimates based on extracted scope and configured assumptions. They are not quotations, guarantees, or professional financial advice.
+Failed or externally blocked runs should not erase useful earlier published outputs.
 
-Operational use requires manual confirmation of:
+## 16. AI and automation boundary
 
-- labour estimate;
-- taxes;
-- guarantees and security;
-- infrastructure;
-- support obligations;
-- legal terms;
-- subcontracting;
-- risk reserve;
-- organization-specific costs.
+The current public implementation is deterministic and rule-based. It does not call external LLM APIs or use embeddings/ML for ranking.
 
-## 10. Extreme reductions
+Future AI-assisted explanations should remain subordinate to source evidence and deterministic validation for accepted facts and financial values.
 
-Very large reductions are not automatically interpreted as violations or fraud.
+## 17. Human responsibility
 
-The analyzer can mark them for manual review and exclude them from ordinary market aggregates where appropriate.
-
-The audited local development artifacts confirm at least one case with a reduction above 90%, but real procurement details are not published in this repository.
-
-## 11. AI and automation boundary
-
-The current public implementation is deterministic and rule-based. It does not call external LLM APIs.
-
-Future LLM-assisted summaries could be added only as a separate explanatory layer. Accepted facts and financial values should continue to depend on source evidence and deterministic validation.
-
-## 12. Human responsibility
-
-The analyzer supports research and preliminary triage.
+The system supports research, triage, and evidence organization.
 
 It does not replace:
 
@@ -205,5 +233,5 @@ It does not replace:
 - financial review;
 - technical estimation;
 - verification of current procurement rules;
-- examination of the complete official documentation;
+- examination of complete official documentation;
 - the final decision to participate.
