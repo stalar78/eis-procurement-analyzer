@@ -1,0 +1,111 @@
+{
+  "failure_events": [
+    {
+      "procurement_number": "99000000000000000001",
+      "law": "44-FZ",
+      "customer": "Fictional City Digital Department",
+      "title": "Development of citizen portal personal account and workflow API",
+      "nmck": 1800000,
+      "procedure_type": "Electronic auction",
+      "region": "Fictional Region",
+      "application_count": 0,
+      "failure_reason": "No applications were submitted before the deadline.",
+      "evidence_source": "structured_result_page",
+      "evidence_excerpt": "No applications were submitted.",
+      "completed_at": "2026-01-10T10:00:00+03:00"
+    },
+    {
+      "procurement_number": "99000000000000000002",
+      "law": "44-FZ",
+      "customer": "Fictional City Digital Department",
+      "title": "Development of citizen portal personal account and workflow API",
+      "nmck": 1810000,
+      "procedure_type": "Electronic auction",
+      "region": "Fictional Region",
+      "application_count": 1,
+      "admitted_application_count": 1,
+      "winner_name": "Synthetic Supplier LLC",
+      "failure_reason": "One application was submitted and admitted.",
+      "evidence_source": "final_protocol",
+      "completed_at": "2026-02-10T10:00:00+03:00"
+    },
+    {
+      "procurement_number": "99000000000000000003",
+      "law": "44-FZ",
+      "customer": "Fictional City Digital Department",
+      "title": "Development of citizen portal personal account and workflow API",
+      "nmck": 1770000,
+      "procedure_type": "Electronic auction",
+      "region": "Fictional Region",
+      "application_count": 3,
+      "admitted_application_count": 0,
+      "failure_reason": "All applications were rejected by the commission.",
+      "evidence_source": "application_review_protocol",
+      "completed_at": "2026-03-10T10:00:00+03:00"
+    },
+    {
+      "procurement_number": "99000000000000000004",
+      "customer": "Fictional City Digital Department",
+      "title": "Development of citizen portal personal account and workflow API",
+      "nmck": 1800000,
+      "procedure_type": "Electronic auction",
+      "region": "Fictional Region",
+      "failure_reason": "Procedure was cancelled by the customer.",
+      "completed_at": "2026-04-10T10:00:00+03:00"
+    },
+    {
+      "procurement_number": "99000000000000000005",
+      "customer": "Fictional City Digital Department",
+      "title": "Office paper delivery",
+      "nmck": 90000,
+      "procedure_type": "Electronic auction",
+      "region": "Fictional Region",
+      "application_count": 0,
+      "failure_reason": "No applications were submitted.",
+      "completed_at": "2026-01-12T10:00:00+03:00"
+    },
+    {
+      "procurement_number": "99000000000000000006",
+      "customer": "Other Fictional Agency",
+      "title": "Development of citizen portal personal account and workflow API",
+      "nmck": 1800000,
+      "procedure_type": "Electronic auction",
+      "region": "Fictional Region",
+      "application_count": 0,
+      "failure_reason": "No applications were submitted.",
+      "completed_at": "2026-01-12T10:00:00+03:00"
+    },
+    {
+      "procurement_number": "99000000000000000007",
+      "customer": "Fictional City Digital Department",
+      "title": "Development of citizen portal personal account and workflow API",
+      "nmck": 1800000,
+      "procedure_type": "Electronic auction",
+      "region": "Fictional Region",
+      "application_count": 0,
+      "failure_reason": "No applications were submitted.",
+      "completed_at": "2026-12-01T10:00:00+03:00"
+    },
+    {
+      "procurement_number": "99000000000000000008",
+      "customer": "Fictional City Digital Department",
+      "title": "Development of citizen portal personal account and workflow API",
+      "nmck": 1800000,
+      "procedure_type": "Electronic auction",
+      "region": "Fictional Region",
+      "application_count": 0,
+      "failure_reason": "No applications were submitted.",
+      "completed_at": "2026-01-09T10:00:00+03:00"
+    },
+    {
+      "procurement_number": "99000000000000000012",
+      "customer": "Fictional City Digital Department",
+      "title": "Development of citizen portal personal account and workflow API",
+      "nmck": 1800000,
+      "procedure_type": "Electronic auction",
+      "region": "Fictional Region",
+      "failure_reason": "Completed, winner information is absent on the result page.",
+      "completed_at": "2026-01-09T10:00:00+03:00"
+    }
+  ]
+}

@@ -128,3 +128,23 @@ historical:
     minimum_sample_for_high_confidence: 10
     commodity_risk_reduction_threshold: 60
     commodity_risk_participant_threshold: 15
+
+opportunities:
+  enabled: false
+  failure_history:
+    lookback_days: 1095
+    maximum_queries_per_procurement: 3
+    maximum_pages_per_query: 2
+    maximum_candidates: 50
+    maximum_result_resolutions: 5
+    refresh_after_hours: 168
+  republication:
+    maximum_days_between: 365
+    strong_window_days: 90
+    minimum_relation_score: 50
+    strong_relation_score: 75
+  scoring:
+    high_threshold: 75
+    medium_threshold: 55
+    low_threshold: 35
+    minimum_opportunity_score: 35

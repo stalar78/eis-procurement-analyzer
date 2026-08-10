@@ -1,0 +1,3 @@
+[
+  {"artifact_type": "document", "source_url": "https://example.invalid/registry-tz.docx", "original_filename": "registry-tz.docx", "content_type": "application/vnd.openxmlformats-officedocument.wordprocessingml.document", "size_bytes": 22000, "sha256": "cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc", "extraction_status": "success", "document_type": "technical_specification", "document_confidence": "high"}
+]

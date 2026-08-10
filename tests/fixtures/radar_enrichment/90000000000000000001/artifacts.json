@@ -1,0 +1,4 @@
+[
+  {"artifact_type": "document", "source_url": "https://example.invalid/tz.docx", "original_filename": "tz.docx", "content_type": "application/vnd.openxmlformats-officedocument.wordprocessingml.document", "size_bytes": 12000, "sha256": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa", "extraction_status": "success", "document_type": "technical_specification", "document_confidence": "high"},
+  {"artifact_type": "document", "source_url": "https://example.invalid/contract.docx", "original_filename": "contract.docx", "content_type": "application/vnd.openxmlformats-officedocument.wordprocessingml.document", "size_bytes": 15000, "sha256": "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb", "extraction_status": "success", "document_type": "contract_draft", "document_confidence": "high"}
+]

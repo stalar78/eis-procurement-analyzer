@@ -1,0 +1,19 @@
+{
+  "analysis_version": "2.2-decision-model",
+  "procurement_number": "90000000000000000008",
+  "procurement_name": "Модернизация сервиса, срок подачи завтра",
+  "data_completeness_score": 30,
+  "analysis_reliability": "LOW",
+  "technical_participation_verdict": "INSUFFICIENT_TECHNICAL_DATA",
+  "market_result_status": "NO_PROTOCOL",
+  "overall_recommendation": "INSUFFICIENT_DATA",
+  "technical_specification_status": "unreadable",
+  "contract_status": "missing",
+  "application_requirements_status": "unreadable",
+  "nmck_status": "missing",
+  "final_protocol_status": "missing",
+  "partial_failure": true,
+  "key_risks": ["unreadable DOC", "deadline too close"],
+  "manual_review_required": true,
+  "evidence": []
+}

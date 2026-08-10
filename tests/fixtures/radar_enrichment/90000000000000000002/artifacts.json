@@ -1,0 +1,3 @@
+[
+  {"artifact_type": "document", "source_url": "https://example.invalid/site-tz.docx", "original_filename": "site-tz.docx", "content_type": "application/vnd.openxmlformats-officedocument.wordprocessingml.document", "size_bytes": 7000, "sha256": "dddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddd", "extraction_status": "success", "document_type": "technical_specification", "document_confidence": "medium"}
+]

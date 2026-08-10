@@ -66,5 +66,6 @@ NEXT_STEP_README.txt
 !examples/*.csv
 !examples/*.json
 !tests/fixtures/*.json
+!tests/fixtures/**/*.json
 
 PUBLICATION_AUDIT.md

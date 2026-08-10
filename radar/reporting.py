@@ -13,7 +13,7 @@ from openpyxl.utils import get_column_letter
 
 from radar import radar_version
 from radar.historical import HistoricalAssessmentBundle
-from radar.models import ArtifactRecord, DeepAssessment, RadarAssessment, RadarCard, RadarDecision
+from radar.models import ArtifactRecord, DeepAssessment, NoCompetitionOpportunity, RadarAssessment, RadarCard, RadarDecision
 
 
 REPORT_COLUMNS = [
@@ -102,11 +102,13 @@ def build_summary(
     assessments: list[RadarAssessment],
     deep_assessments: list[DeepAssessment] | None = None,
     historical_bundles: list[HistoricalAssessmentBundle] | None = None,
+    opportunities: list[NoCompetitionOpportunity] | None = None,
 ) -> dict[str, Any]:
     eligibility = Counter(item.eligibility_status.value for item in assessments)
     decisions = Counter(item.radar_decision.value for item in assessments)
     deep_assessments = deep_assessments or []
     historical_bundles = historical_bundles or []
+    opportunities = opportunities or []
     deep_decisions = Counter(item.final_radar_decision.value for item in deep_assessments)
     transitions = Counter(f"{item.preliminary_decision.value} -> {item.final_radar_decision.value}" for item in deep_assessments)
     return {
@@ -152,6 +154,7 @@ def build_summary(
         "historical_high_risk": sum(1 for bundle in historical_bundles if bundle.dumping_risk_assessment.risk_level == "HIGH"),
         "historical_extreme_risk": sum(1 for bundle in historical_bundles if bundle.dumping_risk_assessment.risk_level == "EXTREME"),
         "preliminary_to_final_decision_changes": sum(1 for item in deep_assessments if item.preliminary_decision != item.final_radar_decision),
+        "opportunities_found": len(opportunities),
         "decision_transitions": dict(transitions),
         "discovery_mode": diagnostics.get("discovery_mode", ""),
         "search_window": diagnostics.get("search_window", {}),
@@ -183,6 +186,7 @@ def write_reports(
     assessments: list[RadarAssessment],
     historical_bundles: list[HistoricalAssessmentBundle] | None = None,
     deep_assessments: list[DeepAssessment] | None = None,
+    opportunities: list[NoCompetitionOpportunity] | None = None,
     artifacts: list[ArtifactRecord] | None = None,
     enrichment_plan: dict[str, Any] | None = None,
     dry_run: bool = False,
@@ -197,12 +201,16 @@ def write_reports(
     target.mkdir(parents=True, exist_ok=True)
 
     historical_bundles = historical_bundles or []
+    opportunities = opportunities or []
     assessment_by_number = {item.procurement_number: item for item in assessments}
     deep_by_number = {item.procurement_number: item for item in (deep_assessments or [])}
     historical_by_number = {item.procurement_number: item for item in historical_bundles}
     pairs = [(card, assessment_by_number[card.procurement_number]) for card in cards if card.procurement_number in assessment_by_number]
     pairs.sort(key=lambda item: item[1].total_score, reverse=True)
-    summary = build_summary(run_id, started_at, finished_at, as_of, profiles, diagnostics, assessments, deep_assessments, historical_bundles)
+    opportunity_by_number: dict[str, list[NoCompetitionOpportunity]] = {}
+    for opportunity in opportunities:
+        opportunity_by_number.setdefault(opportunity.current_procurement_number, []).append(opportunity)
+    summary = build_summary(run_id, started_at, finished_at, as_of, profiles, diagnostics, assessments, deep_assessments, historical_bundles, opportunities)
 
     json_payload = {
         "summary": summary,
@@ -219,6 +227,7 @@ def write_reports(
                 "dumping_risk_assessment": historical_by_number[card.procurement_number].dumping_risk_assessment.to_dict() if card.procurement_number in historical_by_number else None,
                 "history_adjusted_assessment": historical_by_number[card.procurement_number].history_adjusted_assessment.to_dict() if card.procurement_number in historical_by_number and historical_by_number[card.procurement_number].history_adjusted_assessment else None,
                 "repeated_procurements": [item.to_dict() for item in historical_by_number[card.procurement_number].repeated_procurements] if card.procurement_number in historical_by_number else [],
+                "failure_republication_assessment": [item.to_dict() for item in opportunity_by_number.get(card.procurement_number, [])],
                 "enrichment_status": deep_by_number[card.procurement_number].enrichment_status.value if card.procurement_number in deep_by_number else "NOT_SELECTED",
                 "deep_assessment": deep_by_number[card.procurement_number].to_dict() if card.procurement_number in deep_by_number else None,
                 "final_assessment": deep_by_number[card.procurement_number].to_dict() if card.procurement_number in deep_by_number else assessment.to_dict(),
@@ -230,10 +239,10 @@ def write_reports(
     json_path.write_text(json.dumps(json_payload, ensure_ascii=False, indent=2), encoding="utf-8")
 
     md_path = target / "latest.md"
-    md_path.write_text(render_markdown(summary, pairs, historical_bundles, deep_assessments or []), encoding="utf-8")
+    md_path.write_text(render_markdown(summary, pairs, historical_bundles, deep_assessments or [], opportunities), encoding="utf-8")
 
     xlsx_path = target / "latest.xlsx"
-    write_xlsx(xlsx_path, summary, pairs, diagnostics, historical_bundles, deep_assessments or [], artifacts or [])
+    write_xlsx(xlsx_path, summary, pairs, diagnostics, historical_bundles, deep_assessments or [], opportunities, artifacts or [])
 
     if enrichment_plan is not None:
         plan_path = target / "enrichment_plan.json"
@@ -321,6 +330,7 @@ def write_xlsx(
     diagnostics: dict[str, Any],
     historical_bundles: list[HistoricalAssessmentBundle],
     deep_assessments: list[DeepAssessment],
+    opportunities: list[NoCompetitionOpportunity],
     artifacts: list[ArtifactRecord],
 ) -> None:
     wb = Workbook()
@@ -550,6 +560,33 @@ def write_xlsx(
         ["procurement_number", "no_application_opportunity", "no_application_rate", "risk_level"],
     )
 
+    if opportunities:
+        opportunity_sheet = wb.create_sheet("No Competition Opportunities")
+        _write_table(
+            opportunity_sheet,
+            [
+                [
+                    item.current_procurement_number,
+                    item.previous_procurement_number,
+                    item.current_customer,
+                    item.current_title,
+                    item.current_nmck,
+                    item.previous_nmck,
+                    item.current_deadline,
+                    item.previous_failure_type,
+                    item.previous_application_count,
+                    item.republication_confidence,
+                    item.opportunity_score,
+                    item.opportunity_level,
+                    _joined(item.positive_signals),
+                    _joined(item.risks),
+                    _joined(item.warnings),
+                ]
+                for item in opportunities
+            ],
+            ["current_procurement_number", "previous_procurement_number", "customer", "title", "current_nmck", "previous_nmck", "current_deadline", "previous_failure_type", "previous_application_count", "republication_confidence", "opportunity_score", "opportunity_level", "positive_signals", "risks", "warnings"],
+        )
+
     historical_diag_sheet = wb.create_sheet("Historical Diagnostics")
     _write_table(
         historical_diag_sheet,
@@ -622,9 +659,11 @@ def render_markdown(
     pairs: list[tuple[RadarCard, RadarAssessment]],
     historical_bundles: list[HistoricalAssessmentBundle] | None = None,
     deep_assessments: list[DeepAssessment] | None = None,
+    opportunities: list[NoCompetitionOpportunity] | None = None,
 ) -> str:
     historical_bundles = historical_bundles or []
     deep_assessments = deep_assessments or []
+    opportunities = opportunities or []
     deep_by_number = {item.procurement_number: item for item in deep_assessments}
     historical_by_number = {item.procurement_number: item for item in historical_bundles}
     title = "# R3A Live Historical Validation" if summary.get("decision_context") == "HISTORICAL_VALIDATION" else ("# EIS Procurement Radar — Enriched Digest" if deep_assessments else "# EIS Procurement Radar")
@@ -689,6 +728,15 @@ def render_markdown(
                 f"median reduction={bundle.competition_metrics.median_reduction_percent}, "
                 f"risk={bundle.dumping_risk_assessment.risk_level}, "
                 f"confidence={bundle.dumping_risk_assessment.confidence}"
+            )
+        lines.append("")
+
+    if opportunities:
+        lines.append("## No competition opportunities")
+        for item in opportunities[:20]:
+            lines.append(
+                f"- **{item.current_procurement_number}** <- {item.previous_procurement_number} "
+                f"score={item.opportunity_score}, level={item.opportunity_level}, confidence={item.republication_confidence}"
             )
         lines.append("")
 

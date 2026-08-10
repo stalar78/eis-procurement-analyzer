@@ -17,6 +17,7 @@ from radar.historical_live_validation import (
 )
 from radar.live_collection import normalize_eis_url
 from radar.models import RadarCard
+from radar.opportunities import assess_failed_opportunities
 from radar.prefilter import evaluate_eligibility, parse_as_of
 from radar.reporting import write_reports
 from radar.scoring import assess_card
@@ -78,6 +79,16 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
     parser.add_argument("--supplier-history", action="store_true")
     parser.add_argument("--no-supplier-history", action="store_true")
     parser.add_argument("--find-no-participant-opportunities", action="store_true")
+    parser.add_argument("--failed-opportunities", action="store_true")
+    parser.add_argument("--no-failed-opportunities", action="store_true")
+    parser.add_argument("--failure-history-only", action="store_true")
+    parser.add_argument("--offline-failure-input")
+    parser.add_argument("--max-failure-queries", type=int)
+    parser.add_argument("--max-failure-pages", type=int)
+    parser.add_argument("--max-failure-candidates", type=int)
+    parser.add_argument("--max-republication-links", type=int)
+    parser.add_argument("--minimum-opportunity-score", type=int)
+    parser.add_argument("--refresh-failure-history", action="store_true")
     parser.add_argument("--refresh-history", action="store_true")
     parser.add_argument("--offline-history-input")
     parser.add_argument("--published-within-days", type=int)
@@ -139,6 +150,22 @@ def run(argv: list[str] | None = None) -> int:
         config.historical.supplier_history.enabled = True
     if args.no_supplier_history:
         config.historical.supplier_history.enabled = False
+    if args.failed_opportunities:
+        config.opportunities.enabled = True
+    if args.no_failed_opportunities:
+        config.opportunities.enabled = False
+    if args.failure_history_only:
+        config.opportunities.enabled = True
+    if args.max_failure_queries is not None:
+        config.opportunities.failure_history.maximum_queries_per_procurement = args.max_failure_queries
+    if args.max_failure_pages is not None:
+        config.opportunities.failure_history.maximum_pages_per_query = args.max_failure_pages
+    if args.max_failure_candidates is not None:
+        config.opportunities.failure_history.maximum_candidates = args.max_failure_candidates
+    if args.max_republication_links is not None:
+        config.opportunities.failure_history.maximum_result_resolutions = args.max_republication_links
+    if args.minimum_opportunity_score is not None:
+        config.opportunities.scoring.minimum_opportunity_score = args.minimum_opportunity_score
     if args.published_within_days is not None:
         config.discovery.published_within_days = args.published_within_days
     if args.updated_within_days is not None:
@@ -250,6 +277,8 @@ def run(argv: list[str] | None = None) -> int:
         )
 
     historical_bundles = []
+    opportunities = []
+    opportunity_result = None
     live_validation_result = None
     if config.historical.enabled or args.history_only:
         if args.allow_completed_source:
@@ -280,6 +309,24 @@ def run(argv: list[str] | None = None) -> int:
         diagnostics["historical_enabled"] = True
     else:
         diagnostics["historical_enabled"] = False
+
+    if config.opportunities.enabled or args.failure_history_only:
+        previous_opportunities = {}
+        if state is not None:
+            previous_opportunities = {
+                card.procurement_number: stored
+                for card in cards
+                if (stored := state.get_opportunity(card.procurement_number)) is not None
+            }
+        opportunity_result = assess_failed_opportunities(
+            cards,
+            assessments,
+            config,
+            offline_failure_input=args.offline_failure_input,
+            previous_opportunities=previous_opportunities,
+        )
+        opportunities = opportunity_result.opportunities
+        diagnostics["opportunities"] = opportunity_result.to_dict()
 
     finished_at = datetime.now(as_of.tzinfo)
     enrichment_result = None
@@ -319,11 +366,22 @@ def run(argv: list[str] | None = None) -> int:
             as_of=as_of.isoformat(timespec="seconds"),
             radar_version=radar_version,
             diagnostics=diagnostics,
-                cards=cards,
-                assessments=assessments,
-                historical_bundles=historical_bundles,
-            )
+            cards=cards,
+            assessments=assessments,
+            historical_bundles=historical_bundles,
+        )
         diagnostics.update(state_info)
+        if opportunity_result is not None:
+            from radar import opportunity_intelligence_version
+
+            state.save_opportunity_assessment(
+                algorithm_version=opportunity_intelligence_version,
+                failure_events=opportunity_result.failure_events,
+                republication_links=opportunity_result.republication_links,
+                opportunities=opportunities,
+                transitions=opportunity_result.transitions,
+                detected_at=finished_at.isoformat(timespec="seconds"),
+            )
         if enrichment_result is not None:
             state.save_enrichment_run(
                 enrichment_run_id=f"enrich_{run_id}",
@@ -356,6 +414,7 @@ def run(argv: list[str] | None = None) -> int:
         assessments=assessments,
         historical_bundles=historical_bundles,
         deep_assessments=enrichment_result.deep_assessments if enrichment_result else [],
+        opportunities=opportunities,
         artifacts=enrichment_result.artifacts if enrichment_result else [],
         enrichment_plan=enrichment_result.plan.to_dict() if enrichment_result else None,
         dry_run=args.dry_run,

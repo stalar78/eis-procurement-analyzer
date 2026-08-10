@@ -163,6 +163,40 @@ class HistoricalConfig:
 
 
 @dataclass
+class OpportunityFailureHistoryConfig:
+    lookback_days: int = 1095
+    maximum_queries_per_procurement: int = 3
+    maximum_pages_per_query: int = 2
+    maximum_candidates: int = 50
+    maximum_result_resolutions: int = 5
+    refresh_after_hours: int = 168
+
+
+@dataclass
+class OpportunityRepublicationConfig:
+    maximum_days_between: int = 365
+    strong_window_days: int = 90
+    minimum_relation_score: int = 50
+    strong_relation_score: int = 75
+
+
+@dataclass
+class OpportunityScoringConfig:
+    high_threshold: int = 75
+    medium_threshold: int = 55
+    low_threshold: int = 35
+    minimum_opportunity_score: int = 35
+
+
+@dataclass
+class OpportunitiesConfig:
+    enabled: bool = False
+    failure_history: OpportunityFailureHistoryConfig = field(default_factory=OpportunityFailureHistoryConfig)
+    republication: OpportunityRepublicationConfig = field(default_factory=OpportunityRepublicationConfig)
+    scoring: OpportunityScoringConfig = field(default_factory=OpportunityScoringConfig)
+
+
+@dataclass
 class RadarConfig:
     radar: RadarRuntimeConfig = field(default_factory=RadarRuntimeConfig)
     filters: FilterConfig = field(default_factory=FilterConfig)
@@ -170,6 +204,7 @@ class RadarConfig:
     enrichment: EnrichmentConfig = field(default_factory=EnrichmentConfig)
     discovery: DiscoveryConfig = field(default_factory=DiscoveryConfig)
     historical: HistoricalConfig = field(default_factory=HistoricalConfig)
+    opportunities: OpportunitiesConfig = field(default_factory=OpportunitiesConfig)
 
 
 def _merge_dataclass(instance: Any, data: dict[str, Any]) -> Any:
@@ -213,4 +248,16 @@ def load_config(path: str | Path | None = None) -> RadarConfig:
         for key, instance in nested.items():
             if key in historical_data:
                 _merge_dataclass(instance, historical_data[key])
+    opportunities_data = data.get("opportunities", {})
+    if isinstance(opportunities_data, dict):
+        nested_opportunities = {
+            "failure_history": config.opportunities.failure_history,
+            "republication": config.opportunities.republication,
+            "scoring": config.opportunities.scoring,
+        }
+        top_level = {k: v for k, v in opportunities_data.items() if k not in nested_opportunities}
+        _merge_dataclass(config.opportunities, top_level)
+        for key, instance in nested_opportunities.items():
+            if key in opportunities_data:
+                _merge_dataclass(instance, opportunities_data[key])
     return config

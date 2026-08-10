@@ -5,7 +5,7 @@ import sqlite3
 from pathlib import Path
 from typing import Any
 
-from radar.models import ArtifactRecord, DeepAssessment, EnrichmentStatus, RadarAssessment, RadarCard
+from radar.models import ArtifactRecord, DeepAssessment, EnrichmentStatus, NoCompetitionOpportunity, OpportunityTransition, ProcurementFailureEvent, RadarAssessment, RadarCard, RepeatedProcurementLink
 
 
 TRACKED_FIELDS = {
@@ -319,6 +319,57 @@ class RadarState:
                 created_at TEXT,
                 run_quality_status TEXT,
                 diagnostics_json TEXT
+            )
+            """
+        )
+        cur.execute(
+            """
+            CREATE TABLE IF NOT EXISTS procurement_failure_events (
+                procurement_number TEXT PRIMARY KEY,
+                detected_at TEXT,
+                failure_type TEXT,
+                evidence_confidence TEXT,
+                algorithm_version TEXT,
+                event_json TEXT
+            )
+            """
+        )
+        cur.execute(
+            """
+            CREATE TABLE IF NOT EXISTS republication_links (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                current_procurement_number TEXT,
+                previous_procurement_number TEXT,
+                relation_type TEXT,
+                relation_score INTEGER,
+                confidence TEXT,
+                algorithm_version TEXT,
+                link_json TEXT
+            )
+            """
+        )
+        cur.execute(
+            """
+            CREATE TABLE IF NOT EXISTS opportunity_assessments (
+                current_procurement_number TEXT PRIMARY KEY,
+                previous_procurement_number TEXT,
+                opportunity_score INTEGER,
+                opportunity_level TEXT,
+                detected_at TEXT,
+                algorithm_version TEXT,
+                opportunity_json TEXT
+            )
+            """
+        )
+        cur.execute(
+            """
+            CREATE TABLE IF NOT EXISTS opportunity_transitions (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                procurement_number TEXT,
+                transition_type TEXT,
+                previous_value TEXT,
+                current_value TEXT,
+                detected_at TEXT
             )
             """
         )
@@ -670,6 +721,93 @@ class RadarState:
                     deep.document_analysis_version,
                     deep.error_code,
                     deep.error_message,
+                ),
+            )
+        self.connection.commit()
+
+    def get_opportunity(self, procurement_number: str) -> NoCompetitionOpportunity | None:
+        row = self.connection.execute(
+            "SELECT opportunity_json FROM opportunity_assessments WHERE current_procurement_number = ?",
+            (procurement_number,),
+        ).fetchone()
+        if not row:
+            return None
+        return NoCompetitionOpportunity(**json.loads(row["opportunity_json"]))
+
+    def save_opportunity_assessment(
+        self,
+        *,
+        algorithm_version: str,
+        failure_events: list[ProcurementFailureEvent],
+        republication_links: list[RepeatedProcurementLink],
+        opportunities: list[NoCompetitionOpportunity],
+        transitions: list[OpportunityTransition],
+        detected_at: str,
+    ) -> None:
+        cur = self.connection.cursor()
+        for event in failure_events:
+            cur.execute(
+                """
+                INSERT OR REPLACE INTO procurement_failure_events
+                (procurement_number, detected_at, failure_type, evidence_confidence, algorithm_version, event_json)
+                VALUES (?, ?, ?, ?, ?, ?)
+                """,
+                (
+                    event.procurement_number,
+                    event.detected_at or detected_at,
+                    event.failure_type,
+                    event.evidence_confidence,
+                    algorithm_version,
+                    json.dumps(event.to_dict(), ensure_ascii=False),
+                ),
+            )
+        for link in republication_links:
+            cur.execute(
+                """
+                INSERT INTO republication_links
+                (current_procurement_number, previous_procurement_number, relation_type, relation_score, confidence, algorithm_version, link_json)
+                VALUES (?, ?, ?, ?, ?, ?, ?)
+                """,
+                (
+                    link.current_procurement_number,
+                    link.previous_procurement_number,
+                    link.relation_type,
+                    link.relation_score or link.similarity_score,
+                    link.confidence,
+                    algorithm_version,
+                    json.dumps(link.to_dict(), ensure_ascii=False),
+                ),
+            )
+        for opportunity in opportunities:
+            cur.execute(
+                """
+                INSERT OR REPLACE INTO opportunity_assessments
+                (current_procurement_number, previous_procurement_number, opportunity_score, opportunity_level, detected_at, algorithm_version, opportunity_json)
+                VALUES (?, ?, ?, ?, ?, ?, ?)
+                """,
+                (
+                    opportunity.current_procurement_number,
+                    opportunity.previous_procurement_number,
+                    opportunity.opportunity_score,
+                    opportunity.opportunity_level,
+                    detected_at,
+                    algorithm_version,
+                    json.dumps(opportunity.to_dict(), ensure_ascii=False),
+                ),
+            )
+        for transition in transitions:
+            cur.execute(
+                """
+                INSERT INTO opportunity_transitions
+                (procurement_number, transition_type, previous_value, current_value, detected_at)
+                VALUES (?, ?, ?, ?, ?)
+                """,
+                (
+                    transition.procurement_number,
+                    transition.transition_type,
+                    transition.previous_value,
+                    transition.current_value,
+                    transition.detected_at or detected_at,
                 ),
             )
         self.connection.commit()

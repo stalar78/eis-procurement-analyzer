@@ -515,10 +515,100 @@ class SupplierHistoryProfile:
 class RepeatedProcurementLink:
     current_procurement_number: str
     previous_procurement_number: str
-    similarity_score: int
     relation_type: str
-    evidence: list[str] = field(default_factory=list)
+    relation_score: int = 0
+    similarity_score: int = 0
     confidence: str = "LOW"
+    same_customer: bool = False
+    title_similarity: int = 0
+    functional_similarity: int = 0
+    budget_similarity: int = 0
+    procedure_similarity: int = 0
+    region_similarity: int = 0
+    previous_failure_type: str = ""
+    previous_completed_at: str = ""
+    current_published_at: str = ""
+    days_between: int | None = None
+    evidence: list[str] = field(default_factory=list)
+    warnings: list[str] = field(default_factory=list)
+
+    def to_dict(self) -> dict[str, Any]:
+        data = asdict(self)
+        if not data["similarity_score"]:
+            data["similarity_score"] = self.relation_score
+        if not data["relation_score"]:
+            data["relation_score"] = self.similarity_score
+        return data
+
+
+@dataclass
+class ProcurementFailureEvent:
+    procurement_number: str
+    law: str = ""
+    customer: str = ""
+    title: str = ""
+    nmck: float | None = None
+    procedure_type: str = ""
+    region: str = ""
+    failure_type: str = "UNKNOWN_FAILURE"
+    failure_status_raw: str = ""
+    failure_status_normalized: str = ""
+    failure_reason: str = ""
+    application_count: int | None = None
+    admitted_application_count: int | None = None
+    single_application: bool = False
+    single_application_admitted: bool = False
+    single_application_winner: bool = False
+    contract_concluded: bool = False
+    contract_not_concluded: bool = False
+    protocol_url: str = ""
+    result_url: str = ""
+    evidence_source: str = ""
+    evidence_excerpt: str = ""
+    evidence_confidence: str = "LOW"
+    completed_at: str = ""
+    detected_at: str = ""
+
+    def to_dict(self) -> dict[str, Any]:
+        return asdict(self)
+
+
+@dataclass
+class OpportunityTransition:
+    procurement_number: str
+    transition_type: str
+    previous_value: str = ""
+    current_value: str = ""
+    detected_at: str = ""
+
+    def to_dict(self) -> dict[str, Any]:
+        return asdict(self)
+
+
+@dataclass
+class NoCompetitionOpportunity:
+    current_procurement_number: str
+    previous_procurement_number: str = ""
+    current_title: str = ""
+    current_customer: str = ""
+    current_nmck: float | None = None
+    current_status: str = ""
+    current_deadline: str = ""
+    current_source_url: str = ""
+    previous_failure_type: str = ""
+    previous_application_count: int | None = None
+    previous_nmck: float | None = None
+    republication_confidence: str = "LOW"
+    republication_score: int = 0
+    preliminary_score: int = 0
+    history_adjusted_score: int = 0
+    technical_fit_signal: int = 0
+    competition_opportunity_signal: int = 0
+    opportunity_score: int = 0
+    opportunity_level: str = "INSUFFICIENT_DATA"
+    positive_signals: list[str] = field(default_factory=list)
+    risks: list[str] = field(default_factory=list)
+    warnings: list[str] = field(default_factory=list)
 
     def to_dict(self) -> dict[str, Any]:
         return asdict(self)
