@@ -17,6 +17,7 @@ This directory contains the public technical documentation for EIS Procurement A
 - [Resilience and recovery](RADAR_RESILIENCE.md) — source recovery, last-known-good cache, bounded retries, and transactional publication.
 - [Analog selection](RADAR_ANALOG_SELECTION.md) — source-aware queries, Russian normalization, category gating, and explainable similarity.
 - [Historical result extraction](RADAR_RESULT_EXTRACTION.md) — 44-FZ/223-FZ result resolution, protocol parsing, multi-document assembly, and partial metric samples.
+- [R3B opportunity intelligence](RADAR_OPPORTUNITIES.md) — failed-procurement evidence, republication matching, opportunity scoring, safeguards, and live-validation status.
 
 ## Source of truth
 
