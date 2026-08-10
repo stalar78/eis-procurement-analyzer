@@ -2,178 +2,170 @@
 
 ## General rule
 
-All real analysis outputs are local generated data. They may contain procurement identifiers, customer names, document text, prices, links, and other material that should not be committed to the public repository.
+All real analysis outputs are local generated data. They may contain procurement identifiers, customer names, document text, prices, links, protocol material, and other public-source data that should not be committed to the public repository.
 
-Only synthetic examples under `examples/` are intended for publication.
+Only synthetic/test-oriented fixtures and examples belong in Git.
 
-## Main consolidated outputs
+## Original analyzer outputs
 
-### `procurement_analysis.xlsx`
+The document analyzer can produce consolidated XLSX/JSON/CSV/Markdown reports plus extraction/classification/evidence artifacts.
 
-Workbook for manual review. Depending on the analysis run, sheets may include:
+Typical analyzer artifacts include:
 
-- Summary;
-- All procurements;
-- Top candidates;
-- Technical participation;
-- Market results;
-- Manual market review;
-- Prices and competition;
-- Functional scope;
-- Requirements;
-- Infrastructure;
-- Risks;
-- Data quality;
-- Document classification;
-- Evidence index;
-- Unresolved fields;
-- Extraction errors.
+- `procurement_analysis.xlsx`
+- `procurement_analysis.json`
+- `procurement_analysis.csv`
+- `analysis_summary.md`
+- `extraction_manifest.csv`
+- `document_classification.csv`
+- `evidence_index.csv`
+- `unresolved_fields.csv`
+- `quality_issues.csv`
+- `field_conflicts.csv`
+- `rejected_candidates.csv`
 
-The exact sheet set is determined by the current writer implementation and available data.
+The exact sheet/file set depends on the current writer implementation and available evidence.
 
-### `procurement_analysis.json`
+## Radar run outputs
 
-Structured representation of analyzed procurement cards, extracted values, statuses, scores, verdicts, and quality information.
+Radar writes local structured outputs under the configured output directory. Depending on the selected modes, a run may contain:
 
-### `procurement_analysis.csv`
+- `latest.json`
+- `latest.md`
+- `latest.xlsx`
+- `latest_attempt.json`
+- per-run directories under `runs/`
+- failed/blocked attempt directories where configured
+- discovery diagnostics
+- status audit
+- open-verification records
+- enrichment plans and diagnostics
+- historical query plans
+- historical candidates and analog selections
+- result/protocol extraction diagnostics
+- competition metric evidence and samples
 
-Flattened table intended for filtering, comparison, and downstream analysis.
+## Transactional publication
 
-### `analysis_summary.md`
+Real Radar runs are published transactionally.
 
-Human-readable summary of the current analysis run.
+A run is first written as a run-specific attempt. According to its quality state, it can then become the latest publishable result.
 
-## Extraction and classification outputs
+`latest_attempt.json` can advance even when a blocked or failed attempt must not replace the previous useful `latest.*` output.
 
-### `extraction_manifest.csv`
+This distinction protects useful reports from unstable external EIS responses.
 
-Tracks document extraction attempts and results.
+## Discovery outputs
 
-Typical information:
+Discovery reporting can include:
 
-- procurement identifier;
-- source path;
-- original filename;
-- detected format;
-- extraction status;
-- extracted text length;
-- extractor or fallback used;
-- error details.
+- search diagnostics;
+- status distributions;
+- filter fingerprints;
+- provisional-open counts;
+- detail-page verification results;
+- deadline/status conflicts;
+- query/page/card budget usage.
 
-### `document_classification.csv`
+These files are operational diagnostics, not public examples.
 
-Records the assigned document class and the signals used for classification.
+## Enrichment outputs
 
-Typical classes include technical specifications, contracts, NMCK calculations, application requirements, clarifications, protocols, notices, signatures, and other files.
+Controlled enrichment can produce:
 
-### Per-procurement extracted material
+- enrichment plan;
+- artifact manifest/registry data;
+- per-procurement downloaded documents;
+- extracted/analyzed material;
+- deep assessments;
+- preliminary-to-final decision transitions;
+- download and analyzer diagnostics.
 
-The analyzer can create local folders containing extracted text, intermediate files, and evidence material for individual procurements.
+Downloaded documents and analysis directories are intentionally ignored by Git.
 
-These folders are deliberately excluded from Git.
+## Historical intelligence outputs
 
-## Evidence and quality outputs
+Historical analysis can produce:
 
-### `evidence_index.csv`
+- historical query plan;
+- raw/unique/scored historical candidates;
+- selected analogs;
+- analog score diagnostics;
+- query-effectiveness diagnostics;
+- customer/supplier history summaries;
+- repeated-procurement links;
+- competition metrics;
+- dumping-risk assessment;
+- history-adjusted assessment.
 
-Connects accepted fields to supporting material.
+Historical output must preserve evidence and confidence rather than presenting an unsupported prediction.
 
-Typical columns may include:
+## Historical result extraction outputs
 
-- procurement identifier;
-- field;
-- value;
-- source document;
-- document class;
-- location;
-- excerpt;
-- extraction method;
-- confidence.
+Result-extraction runs may include:
 
-### `unresolved_fields.csv`
+- `analog_result_resolution.json`
+- `analog_result_resolution.csv`
+- `protocol_extraction_diagnostics.json`
+- `assembled_historical_results.json`
+- `competition_metric_samples.json`
 
-Lists important fields that could not be supported by acceptable evidence.
+These files explain how selected analogs were resolved and which fields contributed to each competition metric.
 
-A field may remain unresolved because:
+## Separate metric samples
 
-- the required document is missing;
-- the file is unreadable;
-- extraction is partial;
-- no acceptable pattern was found;
-- candidate values were rejected;
-- allowed sources conflict.
+The historical layer tracks independent evidence samples where possible:
 
-### `quality_issues.csv`
+- participant sample size;
+- reduction sample size;
+- winner sample size;
+- complete-result sample size.
 
-Records issues that affect completeness or reliability, such as unreadable files, partial extraction, missing document groups, and unsupported values.
+A partially populated analog can therefore contribute to one supported metric without being treated as complete for all metrics.
 
-### `field_conflicts.csv`
+## Evidence and quality principle
 
-Records contradictory values found in allowed sources.
+Missing or unresolved values are expected. They must not be replaced with guesses.
 
-The analyzer should expose the conflict rather than silently choosing one source.
+Important values should remain traceable to accepted source evidence, with conflicts, partial extraction, and unavailable documents reported explicitly.
 
-### `rejected_candidates.csv`
+## Decision fields
 
-Stores values or matches that were considered but rejected by strict validation.
+Depending on the stage, reports may expose:
 
-This is especially important for financial extraction, where unrelated amounts must not become final prices.
-
-## Market and decision fields
-
-Typical analyzed fields include:
-
-- initial maximum contract price;
-- final contract price;
-- participant count;
-- price reduction percentage;
-- document availability statuses;
-- technical complexity score;
-- financial risk score;
-- solo developer fit score;
-- AI-assisted development fit score;
-- recommended minimum price;
-- recommended comfortable price;
+- preliminary score/decision;
+- open-verification status;
+- historical confidence;
+- analog count and strong-analog count;
+- participant/reduction metrics;
+- competition/dumping risk;
+- history-adjusted score/decision;
 - technical participation verdict;
-- market result status;
-- overall recommendation;
-- manual review flags;
-- exclusion from market aggregates.
+- deep assessment;
+- final manual-review recommendation;
+- manual-review flags and warnings.
 
-Not every field is available for every procurement. Missing or unresolved values are expected and should not be replaced with guesses.
+Previous decision layers are preserved rather than overwritten silently.
 
 ## Synthetic public examples
 
-The public repository may contain small synthetic examples demonstrating:
-
-- a fictional input candidate;
-- a fictional analyzed result;
-- document classification;
-- evidence records;
-- unresolved fields;
-- quality issues;
-- conflicts;
-- a Markdown summary.
-
-Synthetic examples must use:
+Public examples should use:
 
 - invented procurement identifiers;
 - fictional customers;
-- `example.invalid` URLs;
+- invalid/example URLs;
 - invented filenames and excerpts;
 - values that do not reproduce a real procurement record.
 
 ## Development-run aggregate figures
 
-The local audited project artifacts confirm:
+The earlier audited local analyzer artifacts confirmed:
 
 - 1,237 unique collected records;
 - 15 selected candidates;
 - 125 downloaded documents;
-- two analyzed cases with a reduction of at least 75%;
-- one analyzed case with a reduction above 90%;
-- a maximum confirmed participant count of 11 in the audited analysis set.
+- at least one analyzed case requiring manual review because of an extreme price reduction.
 
-The previously discussed claim of more than 50 participants is not supported by the audited artifacts and must not be published as a project result.
+Later Radar development validated historical analog/result extraction on bounded real public-source runs, but the real run artifacts themselves remain local and are not published in the repository.
 
-The audited `field_conflicts.csv` contained no confirmed rows, so conflicts between technical specifications and clarifications must be described as a supported capability, not as a confirmed result of the current dataset.
+Project claims should continue to distinguish capability demonstrations from statistically representative market conclusions.
