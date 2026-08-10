@@ -1,4 +1,7 @@
 openpyxl
+PyYAML
+lxml
+tzdata
 playwright
 requests
 python-docx

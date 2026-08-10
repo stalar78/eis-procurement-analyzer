@@ -2241,6 +2241,28 @@ def process_procurement(
     return card
 
 
+def analyze_procurement_directory(
+    procurement_dir: Path,
+    output_dir: Path,
+    *,
+    overwrite: bool = False,
+    run_regression_checks: bool = False,
+) -> dict[str, Any]:
+    """Importable API for one-procurement document analysis."""
+    if run_regression_checks and run_regression_tests() != 0:
+        raise RuntimeError("regression checks failed")
+    output_dir.mkdir(parents=True, exist_ok=True)
+    (output_dir / "_tmp").mkdir(parents=True, exist_ok=True)
+    return process_procurement(
+        Path(procurement_dir),
+        Path(output_dir),
+        detect_utilities(),
+        overwrite,
+        True,
+        False,
+    )
+
+
 def write_procurement_markdown(path: Path, card: dict[str, Any]) -> None:
     lines = [
         f"# {card.get('procurement_number')}",

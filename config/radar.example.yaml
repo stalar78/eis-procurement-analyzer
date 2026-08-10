@@ -1,0 +1,130 @@
+radar:
+  timezone: Europe/Moscow
+  output_dir: outputs/radar
+  database: data/radar.db
+  request_delay_seconds: 1.5
+  max_pages_per_query: 5
+  max_results_per_query: 200
+  default_minimum_days_to_deadline: 7
+  preferred_days_to_deadline: 30
+  update_existing_after_hours: 24
+  save_raw_cards: true
+  deadline_too_close_watch_days: 2
+
+filters:
+  laws:
+    - 44-FZ
+    - 223-FZ
+  statuses:
+    - application_submission
+  hard_exclusion_terms: []
+  preferred_nmck_min: 500000
+  preferred_nmck_max: 3000000
+  hard_nmck_min: 150000
+
+scoring:
+  priority_threshold: 75
+  review_threshold: 55
+  watch_threshold: 35
+
+discovery:
+  mode: ACTIVE_ONLY
+  laws:
+    - 44-FZ
+    - 223-FZ
+  include_statuses:
+    - application_submission
+  exclude_statuses:
+    - completed
+    - cancelled
+    - contract_signed
+  published_within_days: 30
+  updated_within_days: 30
+  sort:
+    field: update_date
+    direction: desc
+  verify_open_status_from_detail_page: true
+  verify_top_candidates_limit: 20
+  query_retry_count: 2
+  empty_query_retry_count: 1
+  maximum_queries_per_run: 10
+  maximum_total_pages: 10
+  maximum_unique_cards: 200
+  minimum_open_candidates_target: 3
+  fallback:
+    enabled: true
+    widen_published_window_days:
+      - 60
+      - 120
+    use_active_and_recent: false
+    add_broader_queries: true
+
+enrichment:
+  enabled: true
+  decisions:
+    - PRIORITY
+    - REVIEW
+  priority_limit_per_run: 10
+  review_limit_per_run: 5
+  total_limit_per_run: 12
+  minimum_preliminary_score:
+    PRIORITY: 75
+    REVIEW: 60
+  minimum_days_to_deadline: 5
+  include_new_only: false
+  include_changed: true
+  skip_already_enriched: true
+  refresh_after_hours: 72
+  max_documents_per_procurement: 80
+  max_total_download_mb_per_run: 500
+  max_single_file_mb: 50
+  download_timeout_seconds: 90
+  analysis_timeout_seconds: 600
+  retry_failed_after_hours: 12
+  max_attempts: 3
+  stop_on_error: false
+  solo_fit_threshold: 6
+  ai_fit_threshold: 6
+  use_history_adjusted_score: true
+  reject_extreme_competition_before_enrichment: false
+  downgrade_extreme_competition_to_watch: true
+  enrich_unknown_history: true
+  enrich_high_competition_when_technical_score_above: 85
+
+historical:
+  enabled: true
+  search:
+    lookback_days: 1095
+    maximum_queries_per_procurement: 5
+    maximum_pages_per_query: 3
+    maximum_raw_candidates: 200
+    maximum_selected_analogs: 20
+    minimum_selected_analogs: 3
+  result_collection:
+    enabled: true
+    maximum_result_pages_per_analog: 3
+    maximum_documents_per_analog: 10
+    download_full_documents: false
+    prefer_structured_results: true
+    prefer_protocol_pages: true
+  similarity:
+    minimum_score: 45
+    strong_similarity_score: 70
+  customer_history:
+    enabled: true
+    maximum_procurements: 100
+  supplier_history:
+    enabled: true
+    maximum_suppliers_per_procurement: 10
+  cache:
+    refresh_after_hours: 168
+  dumping:
+    high_reduction_threshold: 50
+    extreme_reduction_threshold: 75
+    severe_reduction_threshold: 90
+    high_participant_threshold: 10
+    extreme_participant_threshold: 25
+    minimum_sample_for_medium_confidence: 5
+    minimum_sample_for_high_confidence: 10
+    commodity_risk_reduction_threshold: 60
+    commodity_risk_participant_threshold: 15

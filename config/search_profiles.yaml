@@ -1,0 +1,203 @@
+profiles:
+  - name: medium_complexity_web
+    enabled: true
+    queries:
+      - личный кабинет
+      - веб-приложение
+      - веб сервис
+      - электронный сервис
+      - административная панель
+      - система обработки заявок
+      - информационная система
+      - электронный реестр
+      - автоматизация обращений
+      - учет обращений
+      - система согласования
+      - разработка модуля
+      - доработка информационной системы
+      - развитие информационной системы
+      - автоматизация бизнес-процесса
+    positive_terms:
+      - личный кабинет
+      - роли
+      - права доступа
+      - реестр
+      - workflow
+      - согласование
+      - обработка заявок
+      - генерация документов
+      - API
+      - интеграция
+      - импорт
+      - экспорт
+      - административная панель
+      - отчётность
+    negative_terms:
+      - поставка оборудования
+      - лицензия
+      - продление лицензии
+      - подписка
+      - обучение
+      - SEO
+      - реклама
+      - размещение информации
+      - видеонаблюдение
+      - монтаж
+      - расходные материалы
+      - 1С
+      - ЕСИА
+      - СМЭВ
+      - КриптоПро
+      - ФСТЭК
+      - ФСБ
+      - закрытый контур
+    preferred_nmck_min: 500000
+    preferred_nmck_max: 4000000
+    hard_nmck_min: 150000
+    minimum_days_to_deadline: 7
+    preferred_days_to_deadline: 30
+    commodity_penalty: 10
+    complexity_bonus_terms:
+      - workflow
+      - интеграция
+      - роли
+      - API
+      - генерация документов
+      - согласование
+    exclusion_terms:
+      - поставка оборудования
+      - продление лицензии
+  - name: web_apps
+    enabled: true
+    queries:
+      - веб-приложение
+      - веб сервис
+      - веб-сервис
+      - личный кабинет
+      - административная панель
+      - электронный сервис
+    positive_terms:
+      - веб-приложение
+      - личный кабинет
+      - административная панель
+    negative_terms:
+      - сайт-визитка
+      - лендинг
+    preferred_nmck_min: 500000
+    preferred_nmck_max: 3000000
+    hard_nmck_min: 150000
+    minimum_days_to_deadline: 7
+    preferred_days_to_deadline: 30
+    commodity_penalty: 10
+    complexity_bonus_terms:
+      - роли
+      - api
+      - интеграция
+    exclusion_terms:
+      - продление лицензий
+  - name: automation
+    enabled: true
+    queries:
+      - автоматизация
+      - автоматизация процесса
+      - обработка заявок
+      - система учета
+      - информационная система
+      - автоматизированная система
+      - электронный реестр
+    positive_terms:
+      - автоматизация
+      - обработка заявок
+      - система учета
+    negative_terms:
+      - обучение
+    preferred_nmck_min: 500000
+    preferred_nmck_max: 3500000
+    hard_nmck_min: 150000
+    minimum_days_to_deadline: 7
+    preferred_days_to_deadline: 30
+    commodity_penalty: 8
+    complexity_bonus_terms:
+      - бизнес-процесс
+      - маршрут согласования
+    exclusion_terms: []
+  - name: software_development
+    enabled: true
+    queries:
+      - разработка программного обеспечения
+      - доработка программного обеспечения
+      - модернизация информационной системы
+      - развитие информационной системы
+      - создание модуля
+      - разработка модуля
+    positive_terms:
+      - разработка
+      - доработка
+      - модернизация
+      - модуль
+    negative_terms:
+      - 1с
+      - битрикс24
+    preferred_nmck_min: 500000
+    preferred_nmck_max: 4000000
+    hard_nmck_min: 150000
+    minimum_days_to_deadline: 7
+    preferred_days_to_deadline: 30
+    commodity_penalty: 6
+    complexity_bonus_terms:
+      - изменение функциональности
+      - интеграция
+    exclusion_terms:
+      - поставка компьютеров
+  - name: portals
+    enabled: true
+    queries:
+      - интернет портал
+      - интернет-портал
+      - информационный портал
+      - корпоративный портал
+      - внутренний портал
+    positive_terms:
+      - портал
+      - личный кабинет
+      - реестр
+    negative_terms:
+      - простой муниципальный портал
+      - информационный сайт
+    preferred_nmck_min: 700000
+    preferred_nmck_max: 3000000
+    hard_nmck_min: 150000
+    minimum_days_to_deadline: 7
+    preferred_days_to_deadline: 30
+    commodity_penalty: 18
+    complexity_bonus_terms:
+      - роли
+      - workflow
+    exclusion_terms:
+      - сайт-визитка
+  - name: documents_and_workflows
+    enabled: true
+    queries:
+      - документооборот
+      - генерация документов
+      - согласование документов
+      - электронные заявки
+      - учет обращений
+      - система обработки обращений
+    positive_terms:
+      - документооборот
+      - генерация документов
+      - согласование документов
+      - учет обращений
+    negative_terms: []
+    preferred_nmck_min: 500000
+    preferred_nmck_max: 3000000
+    hard_nmck_min: 150000
+    minimum_days_to_deadline: 7
+    preferred_days_to_deadline: 30
+    commodity_penalty: 7
+    complexity_bonus_terms:
+      - маршрут согласования
+      - workflow
+      - роли
+    exclusion_terms: []

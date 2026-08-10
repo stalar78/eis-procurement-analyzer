@@ -13,6 +13,7 @@ import sys
 import warnings
 import zipfile
 from dataclasses import dataclass, asdict
+from datetime import datetime
 from pathlib import Path
 from typing import Any
 from urllib.parse import unquote, urljoin, urlparse
@@ -128,6 +129,37 @@ class DownloadManifestRow:
     file_size: int
     status: str
     error: str
+
+
+@dataclass
+class CollectionResult:
+    procurement_number: str
+    output_dir: str
+    status: str
+    error: str = ""
+
+
+try:
+    from radar.artifact_registry import ArtifactRecord, fingerprint_records, safe_filename, sha256_file
+    from radar.live_collection import (
+        LiveCollectionResult,
+        ProcurementCollectionTarget,
+        canonical_url_for_number,
+        deduplicate_document_links,
+        normalize_eis_url,
+        section_url,
+    )
+except Exception:  # pragma: no cover - collector CLI can run standalone
+    ArtifactRecord = Any
+    LiveCollectionResult = Any
+    ProcurementCollectionTarget = Any
+    canonical_url_for_number = None
+    deduplicate_document_links = None
+    fingerprint_records = None
+    normalize_eis_url = None
+    safe_filename = None
+    section_url = None
+    sha256_file = None
 
 
 def safe_name(value: str, max_length: int = 120) -> str:
@@ -597,6 +629,265 @@ async def main_async(args: argparse.Namespace) -> None:
                 if f.is_file():
                     zf.write(f, f.relative_to(output.parent))
         logging.info("ZIP создан: %s", zip_path)
+
+
+async def _collect_direct_targets_async(
+    targets: list[Any],
+    output_dir: Path,
+    *,
+    overwrite: bool,
+    refresh: bool,
+    max_documents_per_procurement: int | None,
+    max_total_download_bytes: int | None,
+    max_single_file_bytes: int | None,
+    timeout_seconds: int | None,
+    verbose: bool,
+) -> list[Any]:
+    if normalize_eis_url is None:
+        raise RuntimeError("radar live collection helpers are unavailable")
+    output_dir.mkdir(parents=True, exist_ok=True)
+    results: list[Any] = []
+    total_bytes = 0
+    allowed_sections = ["common", "documents", "results", "events", "protocols", "contracts"]
+    required_sections = {"common", "documents"}
+    started_batch = datetime.now().astimezone()
+    async with async_playwright() as p:
+        browser = await p.chromium.launch(headless=True)
+        context = await browser.new_context(
+            locale="ru-RU",
+            timezone_id="Europe/Moscow",
+            viewport={"width": 1440, "height": 1050},
+            ignore_https_errors=True,
+        )
+        page = await context.new_page()
+        page.set_default_timeout((timeout_seconds or 90) * 1000)
+        for target in targets:
+            started = datetime.now().astimezone()
+            number = getattr(target, "procurement_number", "") if not isinstance(target, str) else target
+            source_url = getattr(target, "source_url", "") if not isinstance(target, str) else ""
+            errors: list[str] = []
+            warnings: list[str] = []
+            sections_visited: list[str] = []
+            links_found: list[dict[str, Any]] = []
+            docs_attempted = 0
+            docs_downloaded = 0
+            docs_cached = 0
+            docs_failed = 0
+            bytes_downloaded = 0
+            proc_dir = output_dir / "procurements" / safe_name(number)
+            manifest_path = proc_dir / "manifests" / "live_collection_manifest.json"
+            try:
+                if source_url:
+                    source_url, resolved_number = normalize_eis_url(source_url, number or None)
+                    number = resolved_number
+                else:
+                    if canonical_url_for_number is None:
+                        raise ValueError("cannot resolve procurement URL")
+                    source_url = canonical_url_for_number(number)
+                    warnings.append("source URL resolved from procurement number")
+                proc_dir = output_dir / "procurements" / safe_name(number)
+                for sub in ("pages", "links", "documents", "downloads", "extracted", "analysis", "manifests", "debug"):
+                    (proc_dir / sub).mkdir(parents=True, exist_ok=True)
+                candidate = Candidate(number, "", "", "", "", source_url)
+                (proc_dir / "candidate.json").write_text(json.dumps(asdict(candidate), ensure_ascii=False, indent=2), encoding="utf-8")
+                section_urls = {section: section_url(source_url, section) for section in allowed_sections}
+                discovered: dict[str, str] = {}
+                for section, url in section_urls.items():
+                    try:
+                        await page.goto(url, wait_until="domcontentloaded", timeout=(timeout_seconds or 90) * 1000)
+                        await settle(page)
+                        html_text = await page.content()
+                        text = await page_text(page)
+                        (proc_dir / "pages" / f"{section}.html").write_text(html_text, encoding="utf-8")
+                        (proc_dir / f"{section}.txt").write_text(text, encoding="utf-8")
+                        sections_visited.append(section)
+                        if section == "common":
+                            discovered = await discover_sections(page, url, number)
+                        section_links = await collect_download_links(page, url, number, section)
+                        for link in section_links:
+                            links_found.append(
+                                {
+                                    "section": section,
+                                    "label": link.label,
+                                    "url": link.url,
+                                    "source_page": link.source_page,
+                                    "download_attr": link.download_attr,
+                                }
+                            )
+                    except Exception as exc:
+                        message = f"{section}: {exc}"
+                        if section in required_sections:
+                            errors.append(message)
+                        else:
+                            warnings.append(message)
+                for section, url in discovered.items():
+                    if section in section_urls:
+                        section_urls[section] = url
+                unique_links = deduplicate_document_links(links_found)
+                (proc_dir / "links" / "document_links.json").write_text(json.dumps(unique_links, ensure_ascii=False, indent=2), encoding="utf-8")
+                artifact_records: list[Any] = []
+                for index, row in enumerate(unique_links, start=1):
+                    if max_documents_per_procurement and docs_attempted >= max_documents_per_procurement:
+                        warnings.append("TOO_MANY_DOCUMENTS")
+                        break
+                    if max_total_download_bytes and total_bytes >= max_total_download_bytes:
+                        warnings.append("DOWNLOAD_LIMIT_REACHED")
+                        break
+                    docs_attempted += 1
+                    link = DownloadLink(row["section"], row.get("label", ""), row["url"], row.get("source_page", source_url), row.get("download_attr", ""))
+                    try:
+                        status, final_url, headers, body, method = await fetch_download(page, link, (timeout_seconds or 90) * 1000, 2)
+                        content_type = headers.get("content-type", "")
+                        if status >= 400:
+                            docs_failed += 1
+                            errors.append(f"{row['url']}: HTTP {status}")
+                            continue
+                        if not body:
+                            docs_failed += 1
+                            errors.append(f"{row['url']}: empty response")
+                            continue
+                        if max_single_file_bytes and len(body) > max_single_file_bytes:
+                            docs_failed += 1
+                            errors.append(f"{row['url']}: FILE_TOO_LARGE")
+                            continue
+                        if looks_like_html(body, content_type):
+                            docs_failed += 1
+                            errors.append(f"{row['url']}: HTML_INSTEAD_OF_DOCUMENT")
+                            continue
+                        filename = choose_filename(headers, link.download_attr, link.label, final_url, content_type, index)
+                        safe = safe_filename(filename)
+                        target_dir = proc_dir / "documents" / row["section"]
+                        compat_dir = proc_dir / "downloads" / row["section"]
+                        target_dir.mkdir(parents=True, exist_ok=True)
+                        compat_dir.mkdir(parents=True, exist_ok=True)
+                        target = target_dir / safe
+                        if target.exists() and not (overwrite or refresh):
+                            docs_cached += 1
+                        else:
+                            tmp = target.with_suffix(target.suffix + ".tmp")
+                            tmp.write_bytes(body)
+                            tmp.replace(target)
+                            docs_downloaded += 1
+                            bytes_downloaded += target.stat().st_size
+                            total_bytes += target.stat().st_size
+                        compat = compat_dir / target.name
+                        if not compat.exists():
+                            shutil.copy2(target, compat)
+                        artifact_records.append(
+                            ArtifactRecord(
+                                procurement_number=number,
+                                artifact_type="document",
+                                source_url=row["url"],
+                                local_path=str(target),
+                                original_filename=filename,
+                                content_type=content_type,
+                                size_bytes=target.stat().st_size,
+                                sha256=sha256_file(target),
+                                downloaded_at=datetime.now().astimezone().isoformat(timespec="seconds"),
+                                extraction_status="downloaded",
+                                document_type="",
+                                document_confidence="",
+                            )
+                        )
+                    except Exception as exc:
+                        docs_failed += 1
+                        errors.append(f"{row['url']}: {exc}")
+                doc_fingerprint = fingerprint_records(artifact_records)
+                manifest = {
+                    "procurement_number": number,
+                    "source_url": source_url,
+                    "section_urls": section_urls,
+                    "sections_visited": sections_visited,
+                    "links": unique_links,
+                    "artifacts": [asdict(item) for item in artifact_records],
+                    "document_set_fingerprint": doc_fingerprint,
+                    "errors": errors,
+                    "warnings": warnings,
+                }
+                manifest_path.write_text(json.dumps(manifest, ensure_ascii=False, indent=2), encoding="utf-8")
+                missing_required = sorted(required_sections - set(sections_visited))
+                if missing_required or not artifact_records:
+                    status = "PARTIAL" if artifact_records else "FAILED_RETRYABLE"
+                elif errors:
+                    status = "PARTIAL"
+                else:
+                    status = "COMPLETE"
+                finished = datetime.now().astimezone()
+                results.append(
+                    LiveCollectionResult(
+                        procurement_number=number,
+                        source_url=source_url,
+                        procurement_directory=str(proc_dir),
+                        status=status,
+                        pages_visited=len(sections_visited),
+                        sections_visited=sections_visited,
+                        document_links_found=len(unique_links),
+                        documents_attempted=docs_attempted,
+                        documents_downloaded=docs_downloaded,
+                        documents_skipped_cached=docs_cached,
+                        documents_failed=docs_failed,
+                        total_downloaded_bytes=bytes_downloaded,
+                        manifest_path=str(manifest_path),
+                        errors=errors,
+                        warnings=warnings,
+                        started_at=started.isoformat(timespec="seconds"),
+                        finished_at=finished.isoformat(timespec="seconds"),
+                        resolved_common_url=source_url,
+                        document_set_fingerprint=doc_fingerprint,
+                        duration_seconds=(finished - started).total_seconds(),
+                    )
+                )
+            except Exception as exc:
+                finished = datetime.now().astimezone()
+                results.append(
+                    LiveCollectionResult(
+                        procurement_number=number,
+                        source_url=source_url,
+                        procurement_directory=str(proc_dir),
+                        status="FAILED_FINAL",
+                        errors=[str(exc)],
+                        started_at=started.isoformat(timespec="seconds"),
+                        finished_at=finished.isoformat(timespec="seconds"),
+                        duration_seconds=(finished - started).total_seconds(),
+                    )
+                )
+        await context.close()
+        await browser.close()
+    return results
+
+
+def collect_candidate_details_for_procurements(
+    procurements: list[Any],
+    output_dir: Path,
+    *,
+    overwrite: bool = False,
+    refresh: bool = False,
+    max_documents_per_procurement: int | None = None,
+    max_total_download_bytes: int | None = None,
+    max_single_file_bytes: int | None = None,
+    timeout_seconds: int | None = None,
+    verbose: bool = False,
+) -> list[Any]:
+    """Collect live procurement details from direct targets without a queue file."""
+    targets: list[Any] = []
+    for item in procurements:
+        if isinstance(item, str):
+            targets.append(ProcurementCollectionTarget(item, ""))
+        else:
+            targets.append(item)
+    return asyncio.run(
+        _collect_direct_targets_async(
+            targets,
+            Path(output_dir),
+            overwrite=overwrite,
+            refresh=refresh,
+            max_documents_per_procurement=max_documents_per_procurement,
+            max_total_download_bytes=max_total_download_bytes,
+            max_single_file_bytes=max_single_file_bytes,
+            timeout_seconds=timeout_seconds,
+            verbose=verbose,
+        )
+    )
 
 
 def parse_args() -> argparse.Namespace:

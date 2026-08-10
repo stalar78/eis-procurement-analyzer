@@ -29,6 +29,10 @@ temp/
 downloads/
 output/
 outputs/
+radar_preview/
+radar_preview*/
+playwright/.auth/
+storage_state*.json
 
 *.zip
 *.rar
@@ -61,5 +65,6 @@ NEXT_STEP_README.txt
 *.json
 !examples/*.csv
 !examples/*.json
+!tests/fixtures/*.json
 
 PUBLICATION_AUDIT.md
