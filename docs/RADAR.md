@@ -4,9 +4,9 @@
 
 EIS Procurement Radar is the stateful decision-support layer of EIS Procurement Analyzer. It turns live EIS search results into a bounded, explainable pipeline for identifying procurements worth manual review.
 
-Current Radar version: `0.3.4-r3a-result-extraction`.
+Current Radar version: `0.3.5-r3b-opportunities`.
 
-The Radar is intentionally conservative. It does not bid, submit applications, predict a winning price, or replace legal/commercial review.
+The Radar is intentionally conservative. It does not submit applications or replace legal/commercial review.
 
 ## End-to-end flow
 
@@ -20,6 +20,7 @@ active EIS discovery
     -> historical result/protocol extraction
     -> competition metrics + confidence
     -> history-adjusted assessment
+    -> failed-procurement / republication opportunity intelligence
     -> controlled document enrichment
     -> deep assessment
     -> final manual-review recommendation
@@ -45,6 +46,16 @@ Decisions include `PRIORITY`, `REVIEW`, `WATCH`, `REJECT`, and `INSUFFICIENT_DAT
 
 Historical evidence adjusts but does not overwrite the preliminary assessment.
 
+### Failed-procurement opportunities
+
+`radar.opportunities` adds a separate opportunity-intelligence layer for evidence-backed historical failures and likely republications.
+
+It distinguishes cases such as `NO_APPLICATIONS`, `SINGLE_APPLICATION`, `ALL_APPLICATIONS_REJECTED`, `NO_ADMITTED_APPLICATIONS`, cancellation, contract-not-concluded, and unknown failure. Missing winner or price is not enough to infer zero applications.
+
+The layer links a failed historical procurement to a later current procurement using explainable relation components such as customer, functional/title similarity, budget, procedure, region, temporal proximity, and explicit references.
+
+A separate opportunity score can promote manual review when a current procurement is verified open, technically suitable, and related to weak historical competition. Technical hard rejects and closed/unverified procedures cannot become high-priority opportunities solely because of a historical failure.
+
 ### Enrichment
 
 `radar.enrichment`, `radar.live_collection`, `radar.artifact_registry`, and `radar.deep_assessment` download bounded sets of procurement documents for selected candidates and run the document analyzer.
@@ -52,6 +63,8 @@ Historical evidence adjusts but does not overwrite the preliminary assessment.
 ### State and resilience
 
 `radar.state` stores run/state data in SQLite. `radar.source_resolution` provides bounded recovery when EIS URLs are stale or intermittently unavailable.
+
+R3B also persists failure events, republication links, opportunity assessments, and opportunity transitions for reuse across runs.
 
 ### Reporting
 
@@ -64,16 +77,7 @@ Primary examples:
 - `config/radar.example.yaml`
 - `config/search_profiles.yaml`
 
-Important configuration areas:
-
-- discovery mode and budgets;
-- status filters and date windows;
-- scoring thresholds;
-- enrichment limits;
-- historical lookback/search limits;
-- analog similarity;
-- dumping thresholds;
-- cache refresh windows.
+Important configuration areas now include discovery, scoring, enrichment, historical intelligence, resilience, and an `opportunities` section for failure-history limits, republication windows/scores, and opportunity thresholds.
 
 ## Core CLI
 
@@ -81,19 +85,7 @@ Important configuration areas:
 .\.venv\Scripts\python.exe -m radar.runner --help
 ```
 
-Typical controlled live discovery:
-
-```powershell
-.\.venv\Scripts\python.exe -m radar.runner `
-  --profile medium_complexity_web `
-  --discovery-mode ACTIVE_ONLY `
-  --verify-open-from-detail `
-  --limit 100 `
-  --max-pages 2 `
-  --output outputs\radar_active `
-  --db data\radar_active.db `
-  --verbose
-```
+R3B adds opportunity-related CLI controls including failed-opportunity enable/disable flags, failure-history-only mode, bounded failure query/page/candidate limits, republication-link limits, minimum opportunity score, and failure-history refresh.
 
 ## Decision philosophy
 
@@ -101,9 +93,20 @@ The Radar separates evidence layers deliberately:
 
 - a technically attractive procurement can still have poor historical economics;
 - missing historical data is not a rejection signal;
-- a high-competition history does not automatically reject a strategically valuable procurement;
+- historical failure is not automatically a positive signal;
+- zero applications is different from cancellation or all applications being rejected;
+- a failed historical procedure is not itself a current opportunity;
+- a current procurement must still be open and technically eligible;
 - partial protocol evidence can contribute only to the metric it supports;
 - low-confidence metrics remain low-confidence in the final report.
+
+## Validation status
+
+R3B code acceptance completed with `142 passed` in the full local test suite.
+
+Synthetic fixtures cover explicit no-application cases, single application, all rejected, cancellation, relation scoring, temporal ordering, explicit republication references, closed current procedures, and technical hard rejects.
+
+The first bounded live R3B validation returned zero unique current cards. Therefore the opportunity layer is code/offline-accepted but still requires controlled live failure-discovery validation before it is treated as proven on a real open EIS procurement.
 
 ## Safety and repository hygiene
 
