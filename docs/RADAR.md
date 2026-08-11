@@ -2,9 +2,9 @@
 
 ## Purpose
 
-EIS Procurement Radar is the stateful decision-support layer of EIS Procurement Analyzer. It turns live EIS search results into a bounded, explainable pipeline for identifying procurements worth manual review.
+EIS Procurement Radar is the stateful decision-support layer of EIS Procurement Analyzer. It turns live EIS search results into a bounded, explainable pipeline for identifying procurements worth manual review and tracking meaningful changes across recurring runs.
 
-Current Radar version: `0.3.5-r3b-opportunities`.
+Current Radar version: `0.4.0-r4a-change-feed`.
 
 The Radar is intentionally conservative. It does not submit applications or replace legal/commercial review.
 
@@ -16,11 +16,11 @@ active EIS discovery
     -> provisional eligibility/scoring
     -> detail-page open verification
     -> historical analog search
-    -> category compatibility + similarity scoring
     -> historical result/protocol extraction
     -> competition metrics + confidence
     -> history-adjusted assessment
     -> failed-procurement / republication opportunity intelligence
+    -> recurring-state comparison / change feed
     -> controlled document enrichment
     -> deep assessment
     -> final manual-review recommendation
@@ -32,7 +32,7 @@ active EIS discovery
 
 `radar.discovery`, `radar.search_request`, `radar.search_profiles`, and `radar.open_verification` discover candidate procurements and distinguish currently open procedures from completed, cancelled, unknown, or conflicting states.
 
-The default live mode is `ACTIVE_ONLY`.
+The default live mode is `ACTIVE_ONLY`. Failed-history discovery is separate and uses its own historical search window.
 
 ### Preliminary scoring
 
@@ -48,13 +48,25 @@ Historical evidence adjusts but does not overwrite the preliminary assessment.
 
 ### Failed-procurement opportunities
 
-`radar.opportunities` adds a separate opportunity-intelligence layer for evidence-backed historical failures and likely republications.
+`radar.opportunities` adds evidence-backed historical failure classification, bounded failed-history discovery, republication matching, and a separate opportunity score.
 
-It distinguishes cases such as `NO_APPLICATIONS`, `SINGLE_APPLICATION`, `ALL_APPLICATIONS_REJECTED`, `NO_ADMITTED_APPLICATIONS`, cancellation, contract-not-concluded, and unknown failure. Missing winner or price is not enough to infer zero applications.
+The model distinguishes no applications, single application, all rejected, no admitted applications, cancellation, contract-not-concluded, and unknown failure. Missing winner or price is not enough to infer zero applications.
 
-The layer links a failed historical procurement to a later current procurement using explainable relation components such as customer, functional/title similarity, budget, procedure, region, temporal proximity, and explicit references.
+### Recurring change feed
 
-A separate opportunity score can promote manual review when a current procurement is verified open, technically suitable, and related to weak historical competition. Technical hard rejects and closed/unverified procedures cannot become high-priority opportunities solely because of a historical failure.
+R4A reuses the existing SQLite state rather than introducing a parallel persistence model. Each saved run can emit `ChangeFeedEvent` records only for meaningful transitions.
+
+Examples include:
+
+- `NEW_PROCUREMENT`;
+- deadline, NMCK, or status changes;
+- preliminary/history score and decision changes;
+- `PROCUREMENT_CLOSED`;
+- `NEW_OPPORTUNITY`;
+- `OPPORTUNITY_UPDATED`;
+- `OPPORTUNITY_NO_LONGER_ACTIVE`.
+
+Events preserve previous/current values and an explanation where applicable. Repeated identical runs are idempotent: an unchanged second run should emit no change-feed noise.
 
 ### Enrichment
 
@@ -62,13 +74,13 @@ A separate opportunity score can promote manual review when a current procuremen
 
 ### State and resilience
 
-`radar.state` stores run/state data in SQLite. `radar.source_resolution` provides bounded recovery when EIS URLs are stale or intermittently unavailable.
+`radar.state` stores run/state data in SQLite. Existing procurement, assessment, opportunity, transition, and change tables are reused for recurring monitoring.
 
-R3B also persists failure events, republication links, opportunity assessments, and opportunity transitions for reuse across runs.
+`radar.source_resolution` provides bounded recovery when EIS URLs are stale or intermittently unavailable.
 
 ### Reporting
 
-`radar.reporting` writes structured reports and supports transactional publication. The latest attempted run and the latest publishable run can be represented separately.
+`radar.reporting` writes structured reports and supports transactional publication. R4A adds the change feed to runtime JSON/CSV outputs and to the normal XLSX/Markdown reporting surfaces.
 
 ## Configuration
 
@@ -77,7 +89,7 @@ Primary examples:
 - `config/radar.example.yaml`
 - `config/search_profiles.yaml`
 
-Important configuration areas now include discovery, scoring, enrichment, historical intelligence, resilience, and an `opportunities` section for failure-history limits, republication windows/scores, and opportunity thresholds.
+Important configuration areas include discovery, scoring, enrichment, historical intelligence, resilience, and opportunity/failure-history limits.
 
 ## Core CLI
 
@@ -85,7 +97,7 @@ Important configuration areas now include discovery, scoring, enrichment, histor
 .\.venv\Scripts\python.exe -m radar.runner --help
 ```
 
-R3B adds opportunity-related CLI controls including failed-opportunity enable/disable flags, failure-history-only mode, bounded failure query/page/candidate limits, republication-link limits, minimum opportunity score, and failure-history refresh.
+Use the CLI help as the final source of truth for current flags.
 
 ## Decision philosophy
 
@@ -97,16 +109,15 @@ The Radar separates evidence layers deliberately:
 - zero applications is different from cancellation or all applications being rejected;
 - a failed historical procedure is not itself a current opportunity;
 - a current procurement must still be open and technically eligible;
-- partial protocol evidence can contribute only to the metric it supports;
+- recurring monitoring should surface meaningful changes rather than repeat unchanged cards;
+- partial protocol evidence contributes only to the metric it supports;
 - low-confidence metrics remain low-confidence in the final report.
 
 ## Validation status
 
-R3B code acceptance completed with `142 passed` in the full local test suite.
+R3B.1 validated the live failed-history path against real EIS data and confirmed two real `SINGLE_APPLICATION` events from protocol pages.
 
-Synthetic fixtures cover explicit no-application cases, single application, all rejected, cancellation, relation scoring, temporal ordering, explicit republication references, closed current procedures, and technical hard rejects.
-
-The first bounded live R3B validation returned zero unique current cards. Therefore the opportunity layer is code/offline-accepted but still requires controlled live failure-discovery validation before it is treated as proven on a real open EIS procurement.
+R4A was accepted with `151 passed`. A two-run validation using one SQLite database produced 12 `NEW_PROCUREMENT` events on the baseline run and zero new/changed/change-feed events on the identical second run.
 
 ## Safety and repository hygiene
 
@@ -120,3 +131,5 @@ See also:
 - [Resilience](RADAR_RESILIENCE.md)
 - [Analog selection](RADAR_ANALOG_SELECTION.md)
 - [Result extraction](RADAR_RESULT_EXTRACTION.md)
+- [Opportunity intelligence](RADAR_OPPORTUNITIES.md)
+- [Recurring change feed](RADAR_CHANGE_FEED.md)
