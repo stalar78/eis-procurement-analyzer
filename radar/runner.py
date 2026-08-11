@@ -17,6 +17,7 @@ from radar.historical_live_validation import (
 )
 from radar.live_collection import normalize_eis_url
 from radar.models import EligibilityStatus, RadarAssessment, RadarCard, RadarDecision
+from radar.orchestration import FAILURE_EXIT_CODE, LOCKED_EXIT_CODE, acquire_run_lock, retain_runtime_runs, RunLockedError
 from radar.opportunities import assess_failed_opportunities, assess_failure_history
 from radar.prefilter import evaluate_eligibility, parse_as_of
 from radar.reporting import write_reports
@@ -104,6 +105,10 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
     parser.add_argument("--status-audit", action="store_true")
     parser.add_argument("--query", action="append", default=[])
     parser.add_argument("--query-file")
+    parser.add_argument("--recurring", action="store_true")
+    parser.add_argument("--lock-stale-minutes", type=int)
+    parser.add_argument("--retain-runs", type=int)
+    parser.add_argument("--retain-failed-runs", type=int)
     return parser.parse_args(argv)
 
 
@@ -120,6 +125,12 @@ def run(argv: list[str] | None = None) -> int:
         config.radar.output_dir = args.output
     if args.db:
         config.radar.database = args.db
+    if args.lock_stale_minutes is not None:
+        config.recurring.lock_stale_after_minutes = args.lock_stale_minutes
+    if args.retain_runs is not None:
+        config.recurring.retain_successful_runs = args.retain_runs
+    if args.retain_failed_runs is not None:
+        config.recurring.retain_failed_runs = args.retain_failed_runs
     if args.max_documents_per_procurement is not None:
         config.enrichment.max_documents_per_procurement = args.max_documents_per_procurement
     if args.max_total_download_mb is not None:
@@ -193,7 +204,87 @@ def run(argv: list[str] | None = None) -> int:
     as_of = parse_as_of(args.as_of, config.radar.timezone)
     started_at = datetime.now(as_of.tzinfo)
     run_id = started_at.strftime("%Y%m%d_%H%M%S")
+    if args.recurring:
+        run_id = started_at.strftime("%Y%m%d_%H%M%S_%f")
+    run_lock = None
+    if args.recurring and not args.dry_run:
+        state_for_lifecycle = RadarState(config.radar.database)
+        try:
+            run_lock = acquire_run_lock(
+                config.radar.output_dir,
+                run_id,
+                started_at,
+                config.recurring.lock_stale_after_minutes,
+            )
+        except RunLockedError as exc:
+            finished_at = datetime.now(as_of.tzinfo)
+            state_for_lifecycle.record_run_lifecycle(
+                run_id=run_id,
+                status="SKIPPED_LOCKED",
+                started_at=started_at.isoformat(timespec="seconds"),
+                finished_at=finished_at.isoformat(timespec="seconds"),
+                failure_reason="active recurring run lock",
+                lock_path=str(exc.lock_path),
+                diagnostics={"existing_lock": exc.metadata},
+            )
+            state_for_lifecycle.close()
+            if args.verbose:
+                print(f"Radar {radar_version}: skipped, active lock at {exc.lock_path}")
+            return LOCKED_EXIT_CODE
+        state_for_lifecycle.record_run_lifecycle(
+            run_id=run_id,
+            status="STARTED",
+            started_at=started_at.isoformat(timespec="seconds"),
+            lock_path=str(run_lock.path),
+            diagnostics={"stale_lock_recovered": run_lock.stale_recovered},
+        )
+        state_for_lifecycle.close()
 
+    try:
+        exit_code = _run_pipeline(args, config, profiles, as_of, started_at, run_id, run_lock.stale_recovered if run_lock else False)
+        if args.recurring and not args.dry_run:
+            finished_at = datetime.now(as_of.tzinfo)
+            state_for_lifecycle = RadarState(config.radar.database)
+            state_for_lifecycle.record_run_lifecycle(
+                run_id=run_id,
+                status="SUCCESS",
+                started_at=started_at.isoformat(timespec="seconds"),
+                finished_at=finished_at.isoformat(timespec="seconds"),
+                lock_path=str(run_lock.path) if run_lock else "",
+                diagnostics={"stale_lock_recovered": run_lock.stale_recovered if run_lock else False},
+            )
+            state_for_lifecycle.close()
+            retention = retain_runtime_runs(
+                config.radar.output_dir,
+                config.recurring.retain_successful_runs,
+                config.recurring.retain_failed_runs,
+            )
+            if args.verbose and any(retention.values()):
+                print(f"Radar {radar_version}: retention removed {retention}")
+        return exit_code
+    except Exception as exc:
+        if args.recurring and not args.dry_run:
+            finished_at = datetime.now(as_of.tzinfo)
+            state_for_lifecycle = RadarState(config.radar.database)
+            state_for_lifecycle.record_run_lifecycle(
+                run_id=run_id,
+                status="FAILED",
+                started_at=started_at.isoformat(timespec="seconds"),
+                finished_at=finished_at.isoformat(timespec="seconds"),
+                failure_reason=f"{type(exc).__name__}: {exc}",
+                lock_path=str(run_lock.path) if run_lock else "",
+            )
+            state_for_lifecycle.close()
+            if args.verbose:
+                print(f"Radar {radar_version}: failed: {type(exc).__name__}: {exc}")
+            return FAILURE_EXIT_CODE
+        raise
+    finally:
+        if run_lock:
+            run_lock.release()
+
+
+def _run_pipeline(args: argparse.Namespace, config, profiles, as_of: datetime, started_at: datetime, run_id: str, stale_lock_recovered: bool) -> int:
     if args.enrichment_only:
         if not args.offline_input:
             raise ValueError("--enrichment-only currently requires --offline-input for card context")
@@ -252,6 +343,8 @@ def run(argv: list[str] | None = None) -> int:
     diagnostics["status_audit_requested"] = args.status_audit
     diagnostics["dry_run"] = args.dry_run
     diagnostics["force_refresh"] = args.force_refresh
+    diagnostics["recurring"] = bool(args.recurring)
+    diagnostics["stale_lock_recovered"] = stale_lock_recovered
 
     state = None
     if args.dry_run and not Path(config.radar.database).exists():

@@ -23,6 +23,13 @@ class RadarRuntimeConfig:
 
 
 @dataclass
+class RecurringConfig:
+    lock_stale_after_minutes: int = 120
+    retain_successful_runs: int = 30
+    retain_failed_runs: int = 30
+
+
+@dataclass
 class FilterConfig:
     laws: list[str] = field(default_factory=lambda: ["44-FZ", "223-FZ"])
     statuses: list[str] = field(default_factory=lambda: ["application_submission"])
@@ -199,6 +206,7 @@ class OpportunitiesConfig:
 @dataclass
 class RadarConfig:
     radar: RadarRuntimeConfig = field(default_factory=RadarRuntimeConfig)
+    recurring: RecurringConfig = field(default_factory=RecurringConfig)
     filters: FilterConfig = field(default_factory=FilterConfig)
     scoring: ScoringConfig = field(default_factory=ScoringConfig)
     enrichment: EnrichmentConfig = field(default_factory=EnrichmentConfig)
@@ -224,6 +232,7 @@ def load_config(path: str | Path | None = None) -> RadarConfig:
 
     data = yaml.safe_load(Path(path).read_text(encoding="utf-8")) or {}
     _merge_dataclass(config.radar, data.get("radar", {}))
+    _merge_dataclass(config.recurring, data.get("recurring", {}))
     _merge_dataclass(config.filters, data.get("filters", {}))
     _merge_dataclass(config.scoring, data.get("scoring", {}))
     _merge_dataclass(config.enrichment, data.get("enrichment", {}))

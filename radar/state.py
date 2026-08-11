@@ -83,6 +83,20 @@ class RadarState:
         )
         cur.execute(
             """
+            CREATE TABLE IF NOT EXISTS recurring_run_lifecycle (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                run_id TEXT,
+                status TEXT,
+                started_at TEXT,
+                finished_at TEXT,
+                failure_reason TEXT,
+                lock_path TEXT,
+                diagnostics_json TEXT
+            )
+            """
+        )
+        cur.execute(
+            """
             CREATE TABLE IF NOT EXISTS procurements (
                 procurement_number TEXT PRIMARY KEY,
                 current_json TEXT NOT NULL,
@@ -411,6 +425,41 @@ class RadarState:
             """
         )
         self.connection.commit()
+
+    def record_run_lifecycle(
+        self,
+        *,
+        run_id: str,
+        status: str,
+        started_at: str,
+        finished_at: str = "",
+        failure_reason: str = "",
+        lock_path: str = "",
+        diagnostics: dict[str, Any] | None = None,
+    ) -> None:
+        self.connection.execute(
+            """
+            INSERT INTO recurring_run_lifecycle
+            (run_id, status, started_at, finished_at, failure_reason, lock_path, diagnostics_json)
+            VALUES (?, ?, ?, ?, ?, ?, ?)
+            """,
+            (
+                run_id,
+                status,
+                started_at,
+                finished_at,
+                failure_reason,
+                lock_path,
+                json.dumps(diagnostics or {}, ensure_ascii=False),
+            ),
+        )
+        self.connection.commit()
+
+    def get_run_lifecycle(self, run_id: str) -> sqlite3.Row | None:
+        return self.connection.execute(
+            "SELECT * FROM recurring_run_lifecycle WHERE run_id = ? ORDER BY id DESC LIMIT 1",
+            (run_id,),
+        ).fetchone()
 
     def get_current(self, procurement_number: str) -> sqlite3.Row | None:
         cur = self.connection.execute(

@@ -1,5 +1,5 @@
 """EIS Procurement Radar orchestration layer."""
 
-radar_version = "0.4.0-r4a-change-feed"
+radar_version = "0.4.1-r4b-orchestration"
 historical_result_extraction_version = "0.3.4-r3a-result-extraction"
 opportunity_intelligence_version = "0.3.5-r3b-opportunities"

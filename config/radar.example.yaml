@@ -11,6 +11,11 @@ radar:
   save_raw_cards: true
   deadline_too_close_watch_days: 2
 
+recurring:
+  lock_stale_after_minutes: 120
+  retain_successful_runs: 30
+  retain_failed_runs: 30
+
 filters:
   laws:
     - 44-FZ
