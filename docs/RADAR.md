@@ -2,9 +2,9 @@
 
 ## Purpose
 
-EIS Procurement Radar is the stateful decision-support layer of EIS Procurement Analyzer. It turns live EIS search results into a bounded, explainable pipeline for identifying procurements worth manual review, tracking meaningful changes across recurring runs, and surfacing a compact notification-ready alert feed.
+EIS Procurement Radar is the stateful decision-support layer of EIS Procurement Analyzer. It turns live EIS search results into a bounded, explainable pipeline for identifying procurements worth manual review, tracking meaningful changes across recurring runs, surfacing a compact alert feed, and optionally delivering that feed to Telegram.
 
-Current Radar version: `0.4.2-r4c-alert-filtering`.
+Current Radar version: `0.4.3-r4d-telegram-delivery`.
 
 The Radar is intentionally conservative. It does not submit applications or replace legal/commercial review.
 
@@ -23,6 +23,7 @@ recurring orchestration / lock
     -> failed-procurement / republication opportunity intelligence
     -> recurring-state comparison / change feed
     -> alert filtering / deduplication / priority
+    -> optional Telegram delivery
     -> controlled document enrichment
     -> deep assessment
     -> transactional publication
@@ -71,21 +72,28 @@ A failed recurring run does not replace the last successful published result, an
 
 ### Alert filtering
 
-R4C adds `radar.alerts`, a deterministic layer between the raw change feed and any future delivery channel.
+R4C adds `radar.alerts`, a deterministic layer between the raw change feed and outbound delivery.
 
-It can promote:
+It promotes high-value events, suppresses low-value noise, assigns alert priority, deduplicates multiple changes for the same procurement, and stores alert fingerprints in SQLite `alert_history` so identical alerts are not re-emitted.
 
-- `NEW_OPPORTUNITY`;
-- interesting new procurements already rated `PRIORITY`/`REVIEW` or above a configured score threshold;
-- decision transitions into `PRIORITY`;
-- significant opportunity score/level improvements;
-- significant NMCK changes;
-- deadlines crossing into the urgent window;
-- closure or deactivation of previously interesting items.
+### Telegram delivery
 
-Low-value changes can be suppressed. Multiple qualifying raw changes for the same procurement are deduplicated into one alert while preserving source events, values, and explanation. Alerts receive `HIGH`, `MEDIUM`, or `LOW` priority.
+R4D adds `radar.telegram_delivery`, an optional outbound-only adapter.
 
-SQLite `alert_history` stores alert fingerprints so an identical alert is not emitted again on a repeated run.
+The adapter receives the already-filtered `alert_feed`; it does not repeat business scoring or filtering. It formats concise Telegram messages, splits long payloads within the configured message-size limit, sends through the Telegram Bot API over HTTPS, and records delivery state in SQLite.
+
+Credentials are resolved from environment variables by default:
+
+```text
+RADAR_TELEGRAM_BOT_TOKEN
+RADAR_TELEGRAM_CHAT_ID
+```
+
+Delivery is disabled by default. Real credentials must not be committed.
+
+Successful alert delivery is deduplicated by alert fingerprint, channel, and chat destination. Failed attempts remain retryable. Multi-part messages are also persisted in `alert_delivery_chunks`: if an early chunk succeeds and a later chunk fails, the next retry skips already delivered chunks and sends only the remaining parts. Alert-level `SENT` is recorded only after all chunks have succeeded.
+
+Transient failures use bounded retries with short backoff; permanent HTTP failures stop retrying within that attempt. Telegram delivery failure does not invalidate Radar state or the last successful published report.
 
 ### Enrichment
 
@@ -93,7 +101,7 @@ SQLite `alert_history` stores alert fingerprints so an identical alert is not em
 
 ### State and resilience
 
-`radar.state` stores procurement, assessment, opportunity, transition, change-feed, recurring-run lifecycle, and alert-history data in SQLite.
+`radar.state` stores procurement, assessment, opportunity, transition, change-feed, recurring-run lifecycle, alert-history, and alert-delivery data in SQLite.
 
 `radar.source_resolution` provides bounded recovery when EIS URLs are stale or intermittently unavailable.
 
@@ -101,7 +109,7 @@ SQLite `alert_history` stores alert fingerprints so an identical alert is not em
 
 `radar.reporting` writes structured reports and supports transactional publication. The latest attempted run and last publishable successful result remain separable.
 
-R4C adds `alert_feed` to runtime JSON/CSV outputs and to XLSX/Markdown reporting surfaces.
+The raw change feed and filtered alert feed are available in runtime reporting surfaces. Telegram delivery consumes only the filtered feed.
 
 ## Configuration
 
@@ -110,7 +118,7 @@ Primary examples:
 - `config/radar.example.yaml`
 - `config/search_profiles.yaml`
 
-R4B adds a `recurring` configuration block for stale-lock timeout and runtime retention. R4C adds an `alerts` block with thresholds for interesting new procurements, high-priority score, opportunity-score increase, NMCK percentage change, and urgent deadlines.
+R4B adds a `recurring` block, R4C adds an `alerts` block, and R4D adds a `telegram` block for optional delivery settings, retry limits, timeouts, environment variable names, and maximum message length.
 
 ## Core CLI
 
@@ -118,21 +126,21 @@ R4B adds a `recurring` configuration block for stale-lock timeout and runtime re
 .\.venv\Scripts\python.exe -m radar.runner --help
 ```
 
-Recurring mode is enabled with `--recurring`. The Radar does not contain an internal cron loop; an external scheduler should invoke the recurring command at the desired interval.
+Recurring mode is enabled with `--recurring`. Telegram delivery can be explicitly enabled or disabled through the current CLI/config surface. The Radar does not contain an internal cron loop; an external scheduler should invoke it at the desired interval.
 
 ## Decision philosophy
 
-The Radar separates evidence and operational layers deliberately:
+The Radar separates evidence, alerting, and delivery layers deliberately:
 
 - a technically attractive procurement can still have poor historical economics;
 - missing historical data is not a rejection signal;
 - historical failure is not automatically a positive signal;
 - a current procurement must still be open and technically eligible;
 - recurring monitoring should surface meaningful changes rather than repeat unchanged cards;
-- notification filtering should surface high-value changes rather than forward the complete raw feed;
-- a failed unattended run must not destroy the last useful published result;
+- alert filtering should surface high-value changes rather than forward the complete raw feed;
+- delivery adapters should transmit approved alerts, not make business decisions;
+- a failed delivery must not corrupt the analytical state or last useful report;
 - overlapping recurring runs should be skipped rather than executed concurrently;
-- partial protocol evidence contributes only to the metric it supports;
 - low-confidence metrics remain low-confidence in the final report.
 
 ## Validation status
@@ -143,11 +151,13 @@ R4A was accepted with `151 passed` and demonstrated idempotent two-run state com
 
 R4B was accepted with `156 passed`; deterministic tests cover locking, stale-lock recovery, failure recovery, lifecycle persistence, and retention.
 
-R4C was accepted with `161 passed`. Deterministic tests cover promotion of important events, suppression of low-value noise, transition into `PRIORITY`, urgent deadlines, per-procurement deduplication, and repeated-run alert idempotency.
+R4C was accepted with `161 passed`; tests cover alert promotion, noise suppression, priority transition, urgent deadlines, deduplication, and repeated-run alert idempotency.
+
+R4D was accepted with `168 passed`. Mocked Telegram tests cover successful delivery, duplicate suppression, retryable failure, transient retry, message splitting, disabled delivery, and partial multi-chunk recovery without resending already successful chunks.
 
 ## Safety and repository hygiene
 
-Real procurement documents, live HTML, SQLite state, generated reports, browser state, locks, and downloaded protocol artifacts are runtime data and must remain outside Git.
+Real procurement documents, live HTML, SQLite state, generated reports, browser state, locks, Telegram credentials, and downloaded protocol artifacts are runtime data and must remain outside Git.
 
 See also:
 
@@ -161,3 +171,4 @@ See also:
 - [Recurring change feed](RADAR_CHANGE_FEED.md)
 - [Recurring orchestration](RADAR_ORCHESTRATION.md)
 - [Alert filtering](RADAR_ALERTS.md)
+- [Telegram delivery](RADAR_TELEGRAM.md)
