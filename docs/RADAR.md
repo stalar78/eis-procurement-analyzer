@@ -2,16 +2,17 @@
 
 ## Purpose
 
-EIS Procurement Radar is the stateful decision-support layer of EIS Procurement Analyzer. It turns live EIS search results into a bounded, explainable pipeline for identifying procurements worth manual review, tracking meaningful changes across recurring runs, surfacing a compact alert feed, and optionally delivering that feed to Telegram.
+EIS Procurement Radar is the stateful decision-support layer of EIS Procurement Analyzer. It turns live EIS search results into a bounded, explainable pipeline for identifying procurements worth manual review, tracking meaningful changes across recurring runs, surfacing a compact alert feed, optionally delivering that feed to Telegram, and running through a stable production-style entry point.
 
-Current Radar version: `0.4.3-r4d-telegram-delivery`.
+Current Radar version: `0.4.4-r4e-production-profile`.
 
 The Radar is intentionally conservative. It does not submit applications or replace legal/commercial review.
 
 ## End-to-end flow
 
 ```text
-recurring orchestration / lock
+production profile / preflight
+    -> recurring orchestration / lock
     -> active EIS discovery
     -> deduplication and state
     -> provisional eligibility/scoring
@@ -30,130 +31,97 @@ recurring orchestration / lock
     -> lifecycle record + retention
 ```
 
-## Main layers
-
-### Discovery
-
-`radar.discovery`, `radar.search_request`, `radar.search_profiles`, and `radar.open_verification` discover candidate procurements and distinguish currently open procedures from completed, cancelled, unknown, or conflicting states.
-
-The default live mode is `ACTIVE_ONLY`. Failed-history discovery is separate and uses its own historical search window.
-
-### Preliminary scoring
-
-`radar.prefilter` and `radar.scoring` apply configurable rule-based filters and scores. Technical interest, budget, deadline, complexity, data quality, commodity risk, and negative platform/security signals are handled separately.
-
-Decisions include `PRIORITY`, `REVIEW`, `WATCH`, `REJECT`, and `INSUFFICIENT_DATA`.
-
-### Historical intelligence
-
-`radar.historical`, `radar.analog_search`, `radar.competition_metrics`, and `radar.result_extraction` search completed procurements, select explainable analogs, resolve result/protocol evidence, and calculate competition metrics.
-
-Historical evidence adjusts but does not overwrite the preliminary assessment.
-
-### Failed-procurement opportunities
-
-`radar.opportunities` adds evidence-backed historical failure classification, bounded failed-history discovery, republication matching, and a separate opportunity score.
+## Operational layers
 
 ### Recurring change feed
 
-R4A reuses the existing SQLite state rather than introducing a parallel persistence model. Each saved run can emit `ChangeFeedEvent` records only for meaningful transitions.
-
-Examples include `NEW_PROCUREMENT`, deadline/NMCK/status changes, score/decision changes, `PROCUREMENT_CLOSED`, `NEW_OPPORTUNITY`, `OPPORTUNITY_UPDATED`, and `OPPORTUNITY_NO_LONGER_ACTIVE`.
-
-Repeated identical runs are idempotent and should emit no change-feed noise.
+R4A reuses the existing SQLite state and emits meaningful `ChangeFeedEvent` transitions rather than repeating unchanged observations.
 
 ### Recurring orchestration
 
-R4B adds the operational shell needed for unattended external scheduling.
-
-`radar.orchestration` provides atomic `radar.lock` acquisition, stale-lock recovery, distinct exit codes, and bounded retention. `radar.state` stores append-only lifecycle statuses `STARTED`, `SUCCESS`, `FAILED`, and `SKIPPED_LOCKED`.
-
-A failed recurring run does not replace the last successful published result, and lock release is handled through the failure path so a later run can continue normally.
+R4B adds atomic `radar.lock` acquisition, stale-lock recovery, lifecycle statuses `STARTED`, `SUCCESS`, `FAILED`, and `SKIPPED_LOCKED`, failure isolation, and bounded retention.
 
 ### Alert filtering
 
-R4C adds `radar.alerts`, a deterministic layer between the raw change feed and outbound delivery.
-
-It promotes high-value events, suppresses low-value noise, assigns alert priority, deduplicates multiple changes for the same procurement, and stores alert fingerprints in SQLite `alert_history` so identical alerts are not re-emitted.
+R4C adds `radar.alerts`, which promotes high-value changes, suppresses noise, assigns alert priority, deduplicates multiple events for the same procurement, and stores alert fingerprints so identical alerts are not re-emitted.
 
 ### Telegram delivery
 
-R4D adds `radar.telegram_delivery`, an optional outbound-only adapter.
+R4D adds `radar.telegram_delivery`, an optional outbound-only adapter. It consumes only the filtered `alert_feed`, uses environment-based credentials by default, persists alert- and chunk-level delivery state, and retries transient failures without resending chunks already delivered successfully.
 
-The adapter receives the already-filtered `alert_feed`; it does not repeat business scoring or filtering. It formats concise Telegram messages, splits long payloads within the configured message-size limit, sends through the Telegram Bot API over HTTPS, and records delivery state in SQLite.
+### Production profile and preflight
 
-Credentials are resolved from environment variables by default:
+R4E adds a stable production entry point intended for external schedulers.
+
+`--production` uses `config/radar.production.yaml` by default and automatically enables the existing recurring orchestration path. The default production config is resolved from the project root rather than the current working directory.
+
+Relative production runtime paths such as the SQLite DB and output directory are normalized against the project root, so Task Scheduler or another caller can launch the program from an unrelated working directory without redirecting state into that directory.
+
+`--preflight-only` validates the production environment without starting the pipeline. Current preflight checks include:
+
+- production config is readable;
+- SQLite parent directory is writable or safely creatable;
+- output directory is writable or safely creatable;
+- recurring retention and stale-lock values are valid;
+- Telegram timeout/retry/message-size values are valid;
+- Telegram credentials are present when Telegram delivery is enabled.
+
+Preflight failure returns exit code `78` and does not start the Radar pipeline.
+
+Preflight error output is designed not to expose secret values. Real Telegram credentials must remain outside Git.
+
+## Production CLI
+
+Preflight:
+
+```powershell
+.\.venv\Scripts\python.exe -m radar.runner --production --preflight-only --verbose
+```
+
+Recurring production run:
+
+```powershell
+.\.venv\Scripts\python.exe -m radar.runner --production
+```
+
+The application does not contain an internal scheduler loop. Windows Task Scheduler, cron, or another external scheduler should invoke the production command at the desired interval.
+
+## Configuration
+
+Primary tracked configuration files:
+
+- `config/radar.example.yaml` — general example configuration;
+- `config/radar.production.yaml` — stable production-oriented profile;
+- `config/search_profiles.yaml` — discovery search profiles.
+
+The production profile intentionally contains project-relative paths and environment-variable names rather than machine-specific absolute paths or secrets.
+
+Telegram environment variables:
 
 ```text
 RADAR_TELEGRAM_BOT_TOKEN
 RADAR_TELEGRAM_CHAT_ID
 ```
 
-Delivery is disabled by default. Real credentials must not be committed.
+Telegram remains disabled in the tracked production profile until explicitly enabled.
 
-Successful alert delivery is deduplicated by alert fingerprint, channel, and chat destination. Failed attempts remain retryable. Multi-part messages are also persisted in `alert_delivery_chunks`: if an early chunk succeeds and a later chunk fails, the next retry skips already delivered chunks and sends only the remaining parts. Alert-level `SENT` is recorded only after all chunks have succeeded.
+## State and failure behavior
 
-Transient failures use bounded retries with short backoff; permanent HTTP failures stop retrying within that attempt. Telegram delivery failure does not invalidate Radar state or the last successful published report.
+`radar.state` stores procurement, assessment, opportunity, change-feed, recurring lifecycle, alert-history, and alert-delivery data in SQLite.
 
-### Enrichment
+Production preflight runs before recurring orchestration. A failed preflight does not create a recurring lifecycle run and does not start discovery. Once preflight succeeds, the normal R4B locking/lifecycle semantics remain unchanged.
 
-`radar.enrichment`, `radar.live_collection`, `radar.artifact_registry`, and `radar.deep_assessment` download bounded sets of procurement documents for selected candidates and run the document analyzer.
-
-### State and resilience
-
-`radar.state` stores procurement, assessment, opportunity, transition, change-feed, recurring-run lifecycle, alert-history, and alert-delivery data in SQLite.
-
-`radar.source_resolution` provides bounded recovery when EIS URLs are stale or intermittently unavailable.
-
-### Reporting
-
-`radar.reporting` writes structured reports and supports transactional publication. The latest attempted run and last publishable successful result remain separable.
-
-The raw change feed and filtered alert feed are available in runtime reporting surfaces. Telegram delivery consumes only the filtered feed.
-
-## Configuration
-
-Primary examples:
-
-- `config/radar.example.yaml`
-- `config/search_profiles.yaml`
-
-R4B adds a `recurring` block, R4C adds an `alerts` block, and R4D adds a `telegram` block for optional delivery settings, retry limits, timeouts, environment variable names, and maximum message length.
-
-## Core CLI
-
-```powershell
-.\.venv\Scripts\python.exe -m radar.runner --help
-```
-
-Recurring mode is enabled with `--recurring`. Telegram delivery can be explicitly enabled or disabled through the current CLI/config surface. The Radar does not contain an internal cron loop; an external scheduler should invoke it at the desired interval.
-
-## Decision philosophy
-
-The Radar separates evidence, alerting, and delivery layers deliberately:
-
-- a technically attractive procurement can still have poor historical economics;
-- missing historical data is not a rejection signal;
-- historical failure is not automatically a positive signal;
-- a current procurement must still be open and technically eligible;
-- recurring monitoring should surface meaningful changes rather than repeat unchanged cards;
-- alert filtering should surface high-value changes rather than forward the complete raw feed;
-- delivery adapters should transmit approved alerts, not make business decisions;
-- a failed delivery must not corrupt the analytical state or last useful report;
-- overlapping recurring runs should be skipped rather than executed concurrently;
-- low-confidence metrics remain low-confidence in the final report.
+Telegram delivery failure does not invalidate Radar state or the last successfully published report.
 
 ## Validation status
 
-R3B.1 validated the live failed-history path against real EIS data.
+- R4A: `151 passed`
+- R4B: `156 passed`
+- R4C: `161 passed`
+- R4D: `168 passed`
+- R4E: `176 passed`
 
-R4A was accepted with `151 passed` and demonstrated idempotent two-run state comparison.
-
-R4B was accepted with `156 passed`; deterministic tests cover locking, stale-lock recovery, failure recovery, lifecycle persistence, and retention.
-
-R4C was accepted with `161 passed`; tests cover alert promotion, noise suppression, priority transition, urgent deadlines, deduplication, and repeated-run alert idempotency.
-
-R4D was accepted with `168 passed`. Mocked Telegram tests cover successful delivery, duplicate suppression, retryable failure, transient retry, message splitting, disabled delivery, and partial multi-chunk recovery without resending already successful chunks.
+R4E deterministic tests cover valid preflight, missing Telegram environment values when delivery is enabled, invalid runtime paths, invalid config values, production routing through recurring orchestration, secret-safe errors, fail-fast preflight, and production execution from an unrelated current working directory.
 
 ## Safety and repository hygiene
 
@@ -172,3 +140,4 @@ See also:
 - [Recurring orchestration](RADAR_ORCHESTRATION.md)
 - [Alert filtering](RADAR_ALERTS.md)
 - [Telegram delivery](RADAR_TELEGRAM.md)
+- [Production profile](RADAR_PRODUCTION.md)
