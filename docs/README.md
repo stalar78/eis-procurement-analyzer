@@ -22,6 +22,7 @@ This directory contains the public technical documentation for EIS Procurement A
 - [R4B recurring orchestration](RADAR_ORCHESTRATION.md) — run locking, lifecycle persistence, failure isolation, exit codes, and runtime retention.
 - [R4C alert filtering](RADAR_ALERTS.md) — notification-ready filtering, priority, deduplication, fingerprints, and alert reporting.
 - [R4D Telegram delivery](RADAR_TELEGRAM.md) — outbound Telegram delivery, credentials, retries, duplicate suppression, chunk persistence, and failure isolation.
+- [R4E production profile](RADAR_PRODUCTION.md) — production config, preflight, stable path resolution, secret handling, and external-scheduler runtime contract.
 
 ## Source of truth
 
