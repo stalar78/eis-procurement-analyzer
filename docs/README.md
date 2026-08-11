@@ -21,6 +21,7 @@ This directory contains the public technical documentation for EIS Procurement A
 - [R4A recurring change feed](RADAR_CHANGE_FEED.md) — persisted run comparison, meaningful transitions, idempotency, and change-feed reporting.
 - [R4B recurring orchestration](RADAR_ORCHESTRATION.md) — run locking, lifecycle persistence, failure isolation, exit codes, and runtime retention.
 - [R4C alert filtering](RADAR_ALERTS.md) — notification-ready filtering, priority, deduplication, fingerprints, and alert reporting.
+- [R4D Telegram delivery](RADAR_TELEGRAM.md) — outbound Telegram delivery, credentials, retries, duplicate suppression, chunk persistence, and failure isolation.
 
 ## Source of truth
 
@@ -38,6 +39,6 @@ Documentation explains the architecture and public contract but must not be used
 
 ## Public-data rule
 
-Do not place downloaded procurement documents, live page snapshots, generated analysis outputs, local datasets, SQLite state, browser storage, screenshots with personal data, cookies, tokens, secrets, or machine-specific paths in this directory.
+Do not place downloaded procurement documents, live page snapshots, generated analysis outputs, local datasets, SQLite state, browser storage, screenshots with personal data, cookies, tokens, secrets, Telegram credentials, or machine-specific paths in this directory.
 
 Use only synthetic/test-oriented fixtures and fictional examples for public demonstrations.
