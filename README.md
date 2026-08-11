@@ -8,16 +8,17 @@ The project is **not** a legal, financial, automated participation, or automated
 
 ## Current status
 
-- Radar version: `0.4.5-r4f-windows-deployment`
+- Radar version: `0.4.6-r4f1-state-guardrails`
 - Historical result extraction version: `0.3.4-r3a-result-extraction`
 - Opportunity intelligence version: `0.3.5-r3b-opportunities`
-- Full local test suite at the R4F milestone: `181 passed`
+- Full local test suite at the R4F.1 milestone: `183 passed`
 - R4A adds an idempotent recurring-run change feed.
 - R4B adds reliable recurring execution with locking, lifecycle persistence, failure isolation, and retention.
 - R4C adds deterministic alert filtering, prioritization, deduplication, and alert-history idempotency.
 - R4D adds optional Telegram delivery with persisted alert/chunk status and retry-safe partial delivery.
 - R4E adds a production profile, stable path resolution, fail-fast preflight checks, and a scheduler-friendly entry point.
 - R4F adds a Windows launcher contract for Task Scheduler, timestamped runtime logs, exact exit-code propagation, and narrow runtime-artifact ignores.
+- R4F.1 hardens state transitions so absence from a bounded run is never treated as evidence of procurement closure or opportunity inactivity.
 
 ## Production entry points
 
@@ -41,6 +42,14 @@ scripts\radar-production.cmd
 ```
 
 The launcher resolves the project root from its own location, explicitly uses `.venv\Scripts\python.exe`, writes stdout/stderr to `runtime-logs\radar-YYYYMMDD-HHMMSS.log`, and returns the exact Radar exit code.
+
+## State-transition guardrails
+
+Recurring runs are intentionally bounded. A procurement may disappear from one run simply because the search scope, page budget, query mix, or EIS result ordering changed. R4F.1 therefore treats **absence as absence, not as closure**.
+
+`PROCUREMENT_CLOSED` is emitted only when the procurement is explicitly observed with a supported closed status such as completed, cancelled, closed, or contract signed. Likewise, `OPPORTUNITY_NO_LONGER_ACTIVE` must come from an explicit opportunity transition; it is not inferred from a missing bounded-run observation.
+
+This prevents absence-only state changes from being promoted into alerts or sent through Telegram.
 
 ## Windows Task Scheduler contract
 
@@ -100,6 +109,7 @@ Tracked fixtures are synthetic/test-oriented and should not be replaced with rea
 - [R4D Telegram delivery](docs/RADAR_TELEGRAM.md)
 - [R4E production profile](docs/RADAR_PRODUCTION.md)
 - [R4F Windows deployment](docs/RADAR_WINDOWS_DEPLOYMENT.md)
+- [R4F.1 state-transition guardrails](docs/RADAR_STATE_GUARDRAILS.md)
 - [Synthetic examples](examples/README.md)
 - [Security policy](SECURITY.md)
 
@@ -109,7 +119,7 @@ Tracked fixtures are synthetic/test-oriented and should not be replaced with rea
 .\.venv\Scripts\python.exe -m pytest -q
 ```
 
-R4F validation covers project-root-independent launcher execution, absolute Task Scheduler launcher-path generation, exact preflight exit-code propagation, logging behavior, no duplicated `--production` argument in preflight mode, and the narrow ignore rule for the runtime validation artifact.
+R4F.1 validation covers absence-only procurement state, absence-only opportunity state, explicit closure, explicit opportunity inactivity, downstream alert suppression, and proof that absence-only cases do not trigger Telegram delivery.
 
 ## Known limitations
 
@@ -125,7 +135,7 @@ R4F validation covers project-root-independent launcher execution, absolute Task
 
 ## Development direction
 
-R4A-R4F now provide the operational chain from recurring procurement monitoring through alert delivery and a Windows scheduler-safe production launcher. The next step is machine deployment: configure local environment variables, run production preflight through the launcher, create the Task Scheduler entry, and perform a controlled first scheduled run.
+R4A-R4F.1 now provide the operational chain from recurring procurement monitoring through alert delivery, Windows scheduler-safe execution, and evidence-based state transitions. The next step is machine deployment: configure local Telegram environment variables, rerun production preflight with delivery enabled, perform a controlled production run, and only then register the Windows Task Scheduler job.
 
 ## License
 
