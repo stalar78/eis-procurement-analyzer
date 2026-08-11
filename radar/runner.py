@@ -7,7 +7,7 @@ from pathlib import Path
 
 from radar import radar_version
 from radar.alerts import build_alert_feed
-from radar.config import load_config
+from radar.config import PROJECT_ROOT, load_config, normalize_runtime_paths
 from radar.discovery import discover_cards
 from radar.enrichment import run_enrichment
 from radar.historical import run_historical_for_cards
@@ -21,6 +21,7 @@ from radar.models import EligibilityStatus, RadarAssessment, RadarCard, RadarDec
 from radar.orchestration import FAILURE_EXIT_CODE, LOCKED_EXIT_CODE, acquire_run_lock, retain_runtime_runs, RunLockedError
 from radar.opportunities import assess_failed_opportunities, assess_failure_history
 from radar.prefilter import evaluate_eligibility, parse_as_of
+from radar.preflight import PREFLIGHT_EXIT_CODE, run_production_preflight
 from radar.reporting import write_reports
 from radar.scoring import assess_card
 from radar.search_profiles import load_search_profiles, select_profiles
@@ -32,6 +33,8 @@ from radar.telegram_delivery import deliver_alert_feed
 def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
     parser = argparse.ArgumentParser(description="EIS Procurement Radar Stage R1.")
     parser.add_argument("--config", default="config/radar.example.yaml")
+    parser.add_argument("--production", action="store_true")
+    parser.add_argument("--preflight-only", action="store_true")
     parser.add_argument("--profile")
     parser.add_argument("--all-profiles", action="store_true")
     parser.add_argument("--output")
@@ -120,6 +123,10 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
 
 def run(argv: list[str] | None = None) -> int:
     args = parse_args(argv)
+    if args.production and args.config == "config/radar.example.yaml":
+        args.config = str(PROJECT_ROOT / "config" / "radar.production.yaml")
+    if args.production:
+        args.recurring = True
     validate_live_history_args(
         history_only=args.history_only,
         allow_completed_source=args.allow_completed_source,
@@ -145,6 +152,18 @@ def run(argv: list[str] | None = None) -> int:
         config.telegram.bot_token = args.telegram_bot_token
     if args.telegram_chat_id:
         config.telegram.chat_id = args.telegram_chat_id
+    if args.production or args.preflight_only:
+        normalize_runtime_paths(config, PROJECT_ROOT)
+        preflight = run_production_preflight(args.config, config)
+        if not preflight.ok:
+            if args.verbose or args.preflight_only:
+                for error in preflight.sanitized_errors():
+                    print(f"Preflight failed: {error}")
+            return PREFLIGHT_EXIT_CODE
+        if args.preflight_only:
+            if args.verbose:
+                print("Preflight OK")
+            return 0
     if args.max_documents_per_procurement is not None:
         config.enrichment.max_documents_per_procurement = args.max_documents_per_procurement
     if args.max_total_download_mb is not None:

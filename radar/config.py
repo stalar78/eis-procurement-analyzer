@@ -7,6 +7,9 @@ from typing import Any
 import yaml
 
 
+PROJECT_ROOT = Path(__file__).resolve().parents[1]
+
+
 @dataclass
 class RadarRuntimeConfig:
     timezone: str = "Europe/Moscow"
@@ -297,4 +300,22 @@ def load_config(path: str | Path | None = None) -> RadarConfig:
         for key, instance in nested_opportunities.items():
             if key in opportunities_data:
                 _merge_dataclass(instance, opportunities_data[key])
+    return config
+
+
+def resolve_project_path(path: str | Path) -> Path:
+    value = Path(path)
+    if value.is_absolute():
+        return value
+    return PROJECT_ROOT / value
+
+
+def normalize_runtime_paths(config: RadarConfig, base_dir: str | Path = PROJECT_ROOT) -> RadarConfig:
+    base = Path(base_dir)
+    output_dir = Path(config.radar.output_dir)
+    database = Path(config.radar.database)
+    if not output_dir.is_absolute():
+        config.radar.output_dir = str(base / output_dir)
+    if not database.is_absolute():
+        config.radar.database = str(base / database)
     return config

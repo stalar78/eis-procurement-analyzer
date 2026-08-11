@@ -1,0 +1,30 @@
+radar:
+  timezone: Europe/Moscow
+  output_dir: outputs/radar
+  database: data/radar.db
+
+recurring:
+  lock_stale_after_minutes: 120
+  retain_successful_runs: 30
+  retain_failed_runs: 30
+
+alerts:
+  enabled: true
+
+telegram:
+  enabled: false
+  bot_token_env: RADAR_TELEGRAM_BOT_TOKEN
+  chat_id_env: RADAR_TELEGRAM_CHAT_ID
+  bot_token: ""
+  chat_id: ""
+
+discovery:
+  mode: ACTIVE_ONLY
+  maximum_queries_per_run: 10
+  maximum_total_pages: 10
+
+historical:
+  enabled: true
+
+opportunities:
+  enabled: true
