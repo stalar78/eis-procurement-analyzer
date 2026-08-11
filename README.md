@@ -8,12 +8,14 @@ The project is **not** a legal, financial, automated participation, or automated
 
 ## Current status
 
-- Radar version: `0.3.5-r3b-opportunities`
+- Radar version: `0.3.6-r3b1-live-failure-discovery`
 - Historical result extraction version: `0.3.4-r3a-result-extraction`
 - Opportunity intelligence version: `0.3.5-r3b-opportunities`
-- Full local test suite at the R3B milestone: `142 passed`
+- Full local test suite at the R3B.1 milestone: `147 passed`
 - R3A historical intelligence is accepted for controlled recurring use.
-- R3B failed-procurement opportunity intelligence is code/offline-accepted; controlled live failure-discovery validation is still pending because the first bounded live run returned zero unique current cards.
+- R3B opportunity intelligence is accepted offline and its live failed-history path has now been validated against real EIS data.
+
+The live R3B.1 validation proved that `FAILED_ONLY` can retrieve completed/failed historical procedures, resolve protocol evidence, and classify real weak-competition outcomes. The bounded validation found two real `SINGLE_APPLICATION` cases with high-confidence protocol evidence. No republication relation was found in the bounded same-customer follow-up sample, and none was forced.
 
 The system is intentionally conservative: missing evidence remains missing, partial result data contributes only to supported metrics, and low-confidence signals remain explicitly low-confidence.
 
@@ -39,6 +41,7 @@ EIS active search
 
 - Playwright-based EIS discovery and page traversal;
 - active-procedure search with explicit stage/deadline verification;
+- separate active and failed-history discovery modes;
 - SQLite-backed run, observation, enrichment, historical, and opportunity state;
 - resumable new/changed procurement processing;
 - controlled document enrichment with budgets and artifact hashing;
@@ -55,6 +58,7 @@ EIS active search
 - explicit failed-procurement classification;
 - explainable republication matching;
 - separate opportunity scoring with hard safeguards;
+- bounded live failure-history discovery using its own historical lookback window;
 - transactional reporting with `latest` vs `latest_attempt` semantics;
 - synthetic regression fixtures and automated tests.
 
@@ -167,6 +171,17 @@ The opportunity score is separate from dumping risk. A historical failure cannot
 
 R3B also persists failure events, republication links, opportunity assessments, and transitions for later comparison across runs.
 
+### R3B.1 live validation
+
+R3B.1 fixed two live-path defects discovered during controlled validation:
+
+- the initial zero-card symptom came from a real search card failing detail verification with an unavailable detail URL, not from an empty EIS search;
+- failed-history discovery incorrectly inherited the short active-discovery publication window instead of the configured historical lookback.
+
+After the fixes, a bounded historical-first run using `FAILED_ONLY` returned 50 real historical cards for the first query, inspected five result/protocol candidates, and confirmed two `SINGLE_APPLICATION` events with high-confidence protocol evidence.
+
+Same-customer follow-up searches found no later distinct procurement in the bounded sample for those two cases. This is recorded as no relation found, not as a failed parser or a fabricated republication.
+
 ## Repository safety
 
 Generated/live data must remain local. The repository intentionally excludes runtime outputs, SQLite databases, downloaded procurement documents, browser authentication state, live EIS HTML/protocol artifacts, caches, and temporary run directories.
@@ -181,15 +196,13 @@ Tracked fixtures are synthetic/test-oriented and should not be replaced with rea
 - Some 44-FZ/223-FZ result layouts may still require parser maintenance.
 - Winner evidence is often sparser than participant or reduction evidence.
 - EIS pages may intermittently return unavailable or inconsistent responses.
-- R3B live failure-history discovery still requires a controlled successful validation on real EIS data.
+- Live republication matching is implemented but has not yet been demonstrated with a real bounded pair in the current validation set.
 - The project does not bypass CAPTCHA, authentication boundaries, or closed access.
 - Final participation decisions require human legal, commercial, and technical review.
 
 ## Development direction
 
-The next narrow technical step after R3B is **live failure-discovery validation**: prove that the opportunity layer can find and classify real unsuccessful historical procedures and link them to a real current/open procurement without weakening eligibility rules.
-
-Only after that should the project expand into higher-level recurring orchestration or notifications.
+The failure-history path is now live-validated. The next useful work should focus on operationalizing the Radar for repeated runs and surfacing newly changed/high-value opportunities, while preserving bounded collection and human review.
 
 ## License
 
