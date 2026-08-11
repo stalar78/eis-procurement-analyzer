@@ -20,6 +20,7 @@ This directory contains the public technical documentation for EIS Procurement A
 - [R3B opportunity intelligence](RADAR_OPPORTUNITIES.md) — failed-procurement evidence, republication matching, opportunity scoring, safeguards, and live-validation status.
 - [R4A recurring change feed](RADAR_CHANGE_FEED.md) — persisted run comparison, meaningful transitions, idempotency, and change-feed reporting.
 - [R4B recurring orchestration](RADAR_ORCHESTRATION.md) — run locking, lifecycle persistence, failure isolation, exit codes, and runtime retention.
+- [R4C alert filtering](RADAR_ALERTS.md) — notification-ready filtering, priority, deduplication, fingerprints, and alert reporting.
 
 ## Source of truth
 
