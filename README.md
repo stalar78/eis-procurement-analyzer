@@ -2,22 +2,23 @@
 
 EIS Procurement Analyzer is a rule-based Python pipeline for collecting, downloading, classifying, and analyzing public procurement materials from the Russian EIS system.
 
-The repository includes **EIS Procurement Radar**: a stateful decision-support layer that discovers active procurements, verifies whether applications are still open, estimates technical fit, searches historical analogs, extracts competition evidence, detects failed-procurement/republication opportunities, tracks meaningful changes across recurring runs, and can now execute those recurring runs with locking, lifecycle tracking, failure isolation, and bounded retention.
+The repository includes **EIS Procurement Radar**: a stateful decision-support layer that discovers active procurements, verifies whether applications are still open, estimates technical fit, searches historical analogs, extracts competition evidence, detects failed-procurement/republication opportunities, tracks meaningful changes across recurring runs, safely orchestrates unattended runs, and filters raw changes into a compact notification-ready alert feed.
 
 The project is **not** a legal, financial, automated participation, or automated bidding service.
 
 ## Current status
 
-- Radar version: `0.4.1-r4b-orchestration`
+- Radar version: `0.4.2-r4c-alert-filtering`
 - Historical result extraction version: `0.3.4-r3a-result-extraction`
 - Opportunity intelligence version: `0.3.5-r3b-opportunities`
-- Full local test suite at the R4B milestone: `156 passed`
+- Full local test suite at the R4C milestone: `161 passed`
 - R3A historical intelligence is accepted for controlled recurring use.
 - R3B failed-procurement opportunity intelligence is accepted offline and its live failed-history path has been validated against real EIS data.
 - R4A adds an idempotent recurring-run change feed.
 - R4B adds reliable unattended recurring execution primitives without embedding a scheduler.
+- R4C adds deterministic alert filtering, deduplication, prioritization, and alert-history idempotency before any delivery channel is introduced.
 
-The system is intentionally conservative: missing evidence remains missing, partial result data contributes only to supported metrics, and low-confidence signals remain explicitly low-confidence.
+The system is intentionally conservative: missing evidence remains missing, partial result data contributes only to supported metrics, low-confidence signals remain explicitly low-confidence, and low-value change events can be suppressed before notification.
 
 ## Radar pipeline
 
@@ -33,6 +34,7 @@ recurring run orchestration / lock
     -> history-adjusted assessment
     -> failed-procurement / republication opportunity intelligence
     -> recurring-state comparison / change feed
+    -> alert filtering / deduplication / priority
     -> controlled document enrichment
     -> deep technical assessment
     -> transactional publication
@@ -44,11 +46,15 @@ recurring run orchestration / lock
 - Playwright-based EIS discovery and page traversal;
 - active-procedure search with explicit stage/deadline verification;
 - separate active and failed-history discovery modes;
-- SQLite-backed run, observation, enrichment, historical, opportunity, transition, and recurring-lifecycle state;
+- SQLite-backed run, observation, enrichment, historical, opportunity, transition, recurring-lifecycle, and alert-history state;
 - resumable new/changed procurement processing;
 - idempotent recurring-run change detection;
 - explicit procurement/opportunity transition events;
 - structured change-feed export to JSON, CSV, XLSX, and Markdown;
+- deterministic notification-ready alert filtering;
+- alert priority levels and suppression of low-value events;
+- per-procurement deduplication of multiple raw changes into a concise alert;
+- persisted alert fingerprints to prevent repeated emission of identical alerts;
 - recurring-run lock with stale-lock recovery;
 - lifecycle statuses `STARTED`, `SUCCESS`, `FAILED`, and `SKIPPED_LOCKED`;
 - failure isolation so an unsuccessful recurring run does not replace the last successful published result;
@@ -79,6 +85,7 @@ recurring run orchestration / lock
 - [R3B opportunity intelligence](docs/RADAR_OPPORTUNITIES.md)
 - [R4A recurring change feed](docs/RADAR_CHANGE_FEED.md)
 - [R4B recurring orchestration](docs/RADAR_ORCHESTRATION.md)
+- [R4C alert filtering](docs/RADAR_ALERTS.md)
 - [Synthetic examples](examples/README.md)
 - [Security policy](SECURITY.md)
 
@@ -110,9 +117,9 @@ config/radar.example.yaml
 config/search_profiles.yaml
 ```
 
-The example configuration covers discovery budgets, open-status verification, scoring thresholds, enrichment limits, historical search, opportunity intelligence, and recurring-run controls.
+The example configuration covers discovery budgets, open-status verification, scoring thresholds, enrichment limits, historical search, opportunity intelligence, recurring-run controls, and alert thresholds.
 
-R4B recurring configuration includes stale-lock timeout and retention counts for successful/failed run directories.
+R4C alert configuration includes a minimum score for interesting new procurements, a high-priority score, significant opportunity-score increase, significant NMCK percentage change, and urgent-deadline threshold.
 
 ## Safe validation
 
@@ -148,17 +155,25 @@ Events include new procurements, deadline/NMCK/status changes, score/decision ch
 
 ## R4B recurring orchestration
 
-R4B makes repeated execution safe enough for an external scheduler:
+R4B makes repeated execution safe enough for an external scheduler: it provides `radar.lock`, stale-lock recovery, recurring lifecycle persistence, distinct exit codes, failure isolation, and bounded runtime retention.
 
-- `radar.lock` prevents overlapping recurring runs;
-- stale locks can be recovered after a configurable timeout;
-- lifecycle is appended to SQLite as `STARTED`, `SUCCESS`, `FAILED`, or `SKIPPED_LOCKED`;
-- locked/skipped runs use exit code `75`, ordinary failure uses `1`, success uses `0`;
-- a failed run does not replace the last successful published output;
-- the lock is released through the failure path;
-- successful and failed archived run directories can be retained with bounded counts.
+## R4C notification-ready alert filtering
 
-The R4B validation confirmed two sequential successful runs on one SQLite DB, with the second run producing `new=0`, `changed=0`, and no change-feed events. Locking, stale-lock recovery, failure isolation, and retention are covered by deterministic tests.
+R4C converts the full raw change feed into a smaller alert feed suitable for a future delivery channel.
+
+Promoted conditions include:
+
+- a new procurement already rated `PRIORITY`/`REVIEW` or above the configured score threshold;
+- `NEW_OPPORTUNITY`;
+- a decision transition into `PRIORITY`;
+- a significant opportunity-score or opportunity-level improvement;
+- a significant NMCK change;
+- a deadline that crosses into the configured urgent window;
+- closure or deactivation of an item that was previously interesting.
+
+Minor/noisy changes can be suppressed. Multiple qualifying changes for the same procurement are deduplicated into one concise alert, preserving source events and explanation. Alert fingerprints are stored in SQLite `alert_history`, so repeated identical runs do not re-emit the same alert.
+
+Runtime reporting exposes `alert_feed` in JSON, CSV, XLSX, and Markdown alongside the raw change feed.
 
 ## Repository safety
 
@@ -175,13 +190,13 @@ Tracked fixtures are synthetic/test-oriented and should not be replaced with rea
 - EIS pages may intermittently return unavailable or inconsistent responses.
 - Live republication matching has not yet been demonstrated with a real bounded pair.
 - R4B provides recurring execution safety but does not install or manage Windows Task Scheduler jobs and does not contain an internal scheduler loop.
-- No notification channel is implemented yet.
+- R4C prepares alerts but does not send Telegram, email, or other outbound notifications.
 - The project does not bypass CAPTCHA, authentication boundaries, or closed access.
 - Final participation decisions require human legal, commercial, and technical review.
 
 ## Development direction
 
-R4A and R4B provide the operational base for daily monitoring. The next useful layer is notification-ready filtering: convert the full change feed into a small set of high-value alert events before adding Telegram, email, or another delivery channel.
+R4A-R4C now provide state comparison, reliable recurring execution, and a notification-ready high-value alert feed. The next narrow step is an outbound delivery adapter that sends only the already-filtered alert feed without duplicating business logic inside the delivery channel.
 
 ## License
 
