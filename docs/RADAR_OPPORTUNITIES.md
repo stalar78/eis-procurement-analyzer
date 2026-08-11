@@ -2,7 +2,8 @@
 
 R3B adds a separate decision-support layer for finding current procurements that may be interesting because a related historical procedure showed weak or unsuccessful competition.
 
-Current version: `0.3.5-r3b-opportunities`.
+Current Radar version: `0.3.6-r3b1-live-failure-discovery`.
+Opportunity model version: `0.3.5-r3b-opportunities`.
 
 ## Failure events
 
@@ -37,14 +38,54 @@ Safeguards remain dominant: a technical hard reject, a closed procurement, or un
 
 SQLite persists failure events, republication links, opportunity assessments, and opportunity transitions. This allows later runs to detect changes in score, deadline, NMCK, open/closed state, and relation confidence.
 
+## Live discovery split
+
+R3B.1 validates that active and historical searches must remain distinct.
+
+- `ACTIVE_ONLY` is for current participation candidates and retains open-status/deadline verification.
+- `FAILED_ONLY` is for historical weak/unsuccessful competition and uses the opportunity-history lookback rather than the short active-discovery publication window.
+
+A historical failed procedure does not become a current opportunity by itself.
+
+## R3B.1 live validation
+
+The R3B.1 milestone was accepted with `147 passed` in the full local test suite.
+
+Controlled live validation identified two concrete defects:
+
+1. The original zero-unique-card run was not an empty EIS search. A raw current card was found, but detail verification failed because the detail page was unavailable (`HTTP 404`).
+2. The failure-history path inherited the active-discovery 30-day publication window. This prevented the intended long historical scan. The path now uses `opportunities.failure_history.lookback_days`.
+
+A bounded historical-first validation then used `FAILED_ONLY` with a multi-year publication range and returned 50 real historical cards from the first web/software query. Five result/protocol candidates were inspected.
+
+Two real historical failure events were confirmed:
+
+- one `SINGLE_APPLICATION` procedure with one application and one admitted application;
+- one `SINGLE_APPLICATION` procedure with one application.
+
+Both were supported by resolved official EIS 223-FZ protocol pages and classified with `HIGH` evidence confidence.
+
+The exact live procurement identifiers are intentionally not copied into public documentation; generated live validation artifacts remain local/ignored.
+
+Same-customer follow-up searches for those two events returned only the source procurement after self-exclusion, so no later distinct procurement was available in the bounded sample. Therefore:
+
+- real failure discovery: validated;
+- real failure classification: validated;
+- real protocol evidence extraction: validated;
+- live republication relation: not demonstrated in this bounded sample;
+- fabricated/forced relation: none.
+
+This distinction is intentional. No relation is preferable to a weakly supported relation.
+
 ## CLI and configuration
 
 R3B adds opportunity-related CLI controls, including failed-opportunity mode, failure-history-only mode, bounded query/page/candidate/link limits, minimum opportunity score, and history refresh.
 
 Runtime defaults are configured in the `opportunities` section of `config/radar.example.yaml`.
 
-## Validation status
+## Current limitations
 
-The code milestone was accepted with `142 passed` in the full local test suite. Synthetic fixtures cover zero applications, one application, all rejected, cancellation, relation scoring, temporal ordering, explicit references, closed current procedures, and technical hard rejects.
-
-The first bounded live validation returned zero unique current cards. Therefore R3B is code/offline-accepted but still requires controlled live failure-discovery validation against real EIS data.
+- A real live republication pair has not yet been observed in the bounded validation set.
+- EIS detail/result URLs may intermittently be unavailable.
+- Failure and republication scoring remain deterministic and explainable rather than probabilistic.
+- Current-open opportunity generation still depends on both a validated historical relation and current eligibility safeguards.
