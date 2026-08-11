@@ -2,20 +2,19 @@
 
 EIS Procurement Analyzer is a rule-based Python pipeline for collecting, downloading, classifying, and analyzing public procurement materials from the Russian EIS system.
 
-The repository includes **EIS Procurement Radar**: a stateful decision-support layer that discovers active procurements, verifies whether applications are still open, estimates technical fit, searches historical analogs, extracts competition evidence, detects failed-procurement/republication opportunities, enriches selected candidates with documents, and produces explainable recommendations for manual review.
+The repository includes **EIS Procurement Radar**: a stateful decision-support layer that discovers active procurements, verifies whether applications are still open, estimates technical fit, searches historical analogs, extracts competition evidence, detects failed-procurement/republication opportunities, tracks meaningful changes across recurring runs, enriches selected candidates with documents, and produces explainable recommendations for manual review.
 
 The project is **not** a legal, financial, automated participation, or automated bidding service.
 
 ## Current status
 
-- Radar version: `0.3.6-r3b1-live-failure-discovery`
+- Radar version: `0.4.0-r4a-change-feed`
 - Historical result extraction version: `0.3.4-r3a-result-extraction`
 - Opportunity intelligence version: `0.3.5-r3b-opportunities`
-- Full local test suite at the R3B.1 milestone: `147 passed`
+- Full local test suite at the R4A milestone: `151 passed`
 - R3A historical intelligence is accepted for controlled recurring use.
-- R3B opportunity intelligence is accepted offline and its live failed-history path has now been validated against real EIS data.
-
-The live R3B.1 validation proved that `FAILED_ONLY` can retrieve completed/failed historical procedures, resolve protocol evidence, and classify real weak-competition outcomes. The bounded validation found two real `SINGLE_APPLICATION` cases with high-confidence protocol evidence. No republication relation was found in the bounded same-customer follow-up sample, and none was forced.
+- R3B failed-procurement opportunity intelligence is accepted offline and its live failed-history path has been validated against real EIS data.
+- R4A adds an idempotent recurring-run change feed on top of existing SQLite state.
 
 The system is intentionally conservative: missing evidence remains missing, partial result data contributes only to supported metrics, and low-confidence signals remain explicitly low-confidence.
 
@@ -27,11 +26,11 @@ EIS active search
     -> preliminary eligibility/scoring
     -> detail-page open verification
     -> historical analog search
-    -> analog similarity/category gating
     -> result/protocol extraction
     -> competition metrics + confidence
     -> history-adjusted assessment
     -> failed-procurement / republication opportunity intelligence
+    -> recurring-state comparison / change feed
     -> controlled document enrichment
     -> deep technical assessment
     -> final manual-review recommendation
@@ -42,8 +41,11 @@ EIS active search
 - Playwright-based EIS discovery and page traversal;
 - active-procedure search with explicit stage/deadline verification;
 - separate active and failed-history discovery modes;
-- SQLite-backed run, observation, enrichment, historical, and opportunity state;
+- SQLite-backed run, observation, enrichment, historical, opportunity, and transition state;
 - resumable new/changed procurement processing;
+- idempotent recurring-run change detection;
+- explicit `NEW_PROCUREMENT`, deadline/NMCK/status, score/decision, closed-procurement, and opportunity transitions;
+- structured change-feed export to JSON, CSV, XLSX, and Markdown;
 - controlled document enrichment with budgets and artifact hashing;
 - defensive attachment downloads and format validation;
 - extraction from DOCX, DOC, PDF, XLSX, XLS, ZIP, RAR, RTF, TXT, HTML, and selected binary sources;
@@ -75,6 +77,7 @@ EIS active search
 - [Analog selection](docs/RADAR_ANALOG_SELECTION.md)
 - [Historical result extraction](docs/RADAR_RESULT_EXTRACTION.md)
 - [R3B opportunity intelligence](docs/RADAR_OPPORTUNITIES.md)
+- [R4A recurring change feed](docs/RADAR_CHANGE_FEED.md)
 - [Synthetic examples](examples/README.md)
 - [Security policy](SECURITY.md)
 
@@ -107,8 +110,6 @@ config/search_profiles.yaml
 ```
 
 The example configuration covers discovery budgets, open-status verification, scoring thresholds, enrichment limits, historical search, analog similarity, result collection, dumping-risk thresholds, cache windows, and the R3B `opportunities` section.
-
-The opportunity section includes bounded failure-history search, republication windows and relation thresholds, and opportunity-score thresholds. It is disabled by default until explicitly enabled for a controlled run.
 
 ## Safe validation
 
@@ -152,35 +153,29 @@ Historical evidence adjusts but does not overwrite the preliminary assessment. M
 
 R3B looks for a different kind of signal: a current procurement may be interesting because a related historical procedure had weak or unsuccessful competition.
 
-The failure model distinguishes:
+The failure model distinguishes `NO_APPLICATIONS`, `SINGLE_APPLICATION`, `ALL_APPLICATIONS_REJECTED`, `NO_ADMITTED_APPLICATIONS`, cancellation, contract-not-concluded, and unknown failure. Zero applications and rejection-based outcomes require explicit evidence.
 
-- `NO_APPLICATIONS`;
-- `SINGLE_APPLICATION`;
-- `ALL_APPLICATIONS_REJECTED`;
-- `NO_ADMITTED_APPLICATIONS`;
-- `PROCUREMENT_CANCELLED`;
-- `PROCEDURE_DECLARED_UNSUCCESSFUL`;
-- `CONTRACT_NOT_CONCLUDED`;
-- `UNKNOWN_FAILURE`.
+R3B.1 live validation fixed the failed-history search window and confirmed two real `SINGLE_APPLICATION` events from EIS protocol pages. Live republication matching remains implemented but has not yet been demonstrated with a real bounded pair.
 
-Zero applications and rejection-based outcomes require explicit evidence. Missing winner or missing price is not enough.
+## R4A recurring change feed
 
-Republication matching is explainable and can use same customer, functional/title similarity, budget, procedure, region, temporal proximity, and explicit references.
+R4A compares each persisted run with previous SQLite state and emits only meaningful transitions. Repeated identical runs are idempotent and should produce no change-feed noise.
 
-The opportunity score is separate from dumping risk. A historical failure cannot override core safeguards: a technically rejected, closed, or unverified current procurement cannot become a high-priority opportunity merely because the prior procedure had weak competition.
+Current event classes include:
 
-R3B also persists failure events, republication links, opportunity assessments, and transitions for later comparison across runs.
+- `NEW_PROCUREMENT`;
+- `DEADLINE_CHANGED`;
+- `NMCK_CHANGED`;
+- `STATUS_CHANGED`;
+- preliminary/history score and decision changes;
+- `PROCUREMENT_CLOSED`;
+- `NEW_OPPORTUNITY`;
+- `OPPORTUNITY_UPDATED`;
+- `OPPORTUNITY_NO_LONGER_ACTIVE`.
 
-### R3B.1 live validation
+Each change event can preserve the procurement number, event type, detection time, field name, previous/current values, severity, source, and explanation. Reporting exposes the feed in structured runtime outputs including JSON/CSV and the normal XLSX/Markdown reporting surfaces.
 
-R3B.1 fixed two live-path defects discovered during controlled validation:
-
-- the initial zero-card symptom came from a real search card failing detail verification with an unavailable detail URL, not from an empty EIS search;
-- failed-history discovery incorrectly inherited the short active-discovery publication window instead of the configured historical lookback.
-
-After the fixes, a bounded historical-first run using `FAILED_ONLY` returned 50 real historical cards for the first query, inspected five result/protocol candidates, and confirmed two `SINGLE_APPLICATION` events with high-confidence protocol evidence.
-
-Same-customer follow-up searches found no later distinct procurement in the bounded sample for those two cases. This is recorded as no relation found, not as a failed parser or a fabricated republication.
+The R4A two-run validation used the same local SQLite database: the first fixture run produced 12 `NEW_PROCUREMENT` events; the second identical run produced `0` new, `0` changed, and `0` change events.
 
 ## Repository safety
 
@@ -196,13 +191,14 @@ Tracked fixtures are synthetic/test-oriented and should not be replaced with rea
 - Some 44-FZ/223-FZ result layouts may still require parser maintenance.
 - Winner evidence is often sparser than participant or reduction evidence.
 - EIS pages may intermittently return unavailable or inconsistent responses.
-- Live republication matching is implemented but has not yet been demonstrated with a real bounded pair in the current validation set.
+- Live republication matching has not yet been demonstrated with a real bounded pair.
+- R4A detects changes but does not yet schedule recurring runs or send notifications.
 - The project does not bypass CAPTCHA, authentication boundaries, or closed access.
 - Final participation decisions require human legal, commercial, and technical review.
 
 ## Development direction
 
-The failure-history path is now live-validated. The next useful work should focus on operationalizing the Radar for repeated runs and surfacing newly changed/high-value opportunities, while preserving bounded collection and human review.
+R4A provides the state-diff layer needed for operational monitoring. The next useful step is recurring orchestration: reliable scheduled/looped execution with locking, run lifecycle control, retention, and failure isolation before notification channels are added.
 
 ## License
 
