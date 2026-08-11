@@ -2,16 +2,16 @@
 
 ## Purpose
 
-EIS Procurement Radar is the stateful decision-support layer of EIS Procurement Analyzer. It turns live EIS search results into a bounded, explainable pipeline for identifying procurements worth manual review, tracking meaningful changes across recurring runs, surfacing a compact alert feed, optionally delivering that feed to Telegram, and running through a stable production-style entry point.
+EIS Procurement Radar is the stateful decision-support layer of EIS Procurement Analyzer. It turns live EIS search results into a bounded, explainable pipeline for identifying procurements worth manual review, tracking meaningful changes across recurring runs, surfacing a compact alert feed, optionally delivering that feed to Telegram, and running through a stable Windows production launcher.
 
-Current Radar version: `0.4.4-r4e-production-profile`.
+Current Radar version: `0.4.5-r4f-windows-deployment`.
 
 The Radar is intentionally conservative. It does not submit applications or replace legal/commercial review.
 
 ## End-to-end flow
 
 ```text
-production profile / preflight
+Windows production launcher / production preflight
     -> recurring orchestration / lock
     -> active EIS discovery
     -> deduplication and state
@@ -51,67 +51,69 @@ R4D adds `radar.telegram_delivery`, an optional outbound-only adapter. It consum
 
 ### Production profile and preflight
 
-R4E adds a stable production entry point intended for external schedulers.
+R4E adds `--production`, `config/radar.production.yaml`, stable project-root path resolution, and `--preflight-only`. Production preflight validates config readability, runtime directory writability, operational values, and Telegram credential availability when Telegram is enabled. Preflight failure returns exit code `78` without starting the Radar pipeline.
 
-`--production` uses `config/radar.production.yaml` by default and automatically enables the existing recurring orchestration path. The default production config is resolved from the project root rather than the current working directory.
+### Windows deployment support
 
-Relative production runtime paths such as the SQLite DB and output directory are normalized against the project root, so Task Scheduler or another caller can launch the program from an unrelated working directory without redirecting state into that directory.
+R4F adds `scripts/radar-production.cmd` and `radar.windows_deployment`.
 
-`--preflight-only` validates the production environment without starting the pipeline. Current preflight checks include:
+The launcher:
 
-- production config is readable;
-- SQLite parent directory is writable or safely creatable;
-- output directory is writable or safely creatable;
-- recurring retention and stale-lock values are valid;
-- Telegram timeout/retry/message-size values are valid;
-- Telegram credentials are present when Telegram delivery is enabled.
+- derives the project root from its own location rather than the current working directory;
+- explicitly uses the project's `.venv\Scripts\python.exe`;
+- invokes the existing `radar.runner --production` path rather than implementing another runtime pipeline;
+- supports normal production execution and `--preflight-only` passthrough;
+- redirects stdout/stderr to timestamped files under `runtime-logs/`;
+- preserves the exact Radar process exit code.
 
-Preflight failure returns exit code `78` and does not start the Radar pipeline.
+Task Scheduler must use the absolute local path to the launcher as `Program/script`. This path is a machine deployment value and is deliberately not hardcoded into tracked files. `Start in` is optional because the launcher resolves the project root itself.
 
-Preflight error output is designed not to expose secret values. Real Telegram credentials must remain outside Git.
+`radar.windows_deployment.task_scheduler_command()` exposes the command contract programmatically and returns an absolute launcher path for the local checkout while keeping that path out of committed configuration.
 
-## Production CLI
+## Windows launcher examples
 
 Preflight:
 
 ```powershell
-.\.venv\Scripts\python.exe -m radar.runner --production --preflight-only --verbose
+scripts\radar-production.cmd --preflight-only
 ```
 
-Recurring production run:
+Production run:
 
 ```powershell
-.\.venv\Scripts\python.exe -m radar.runner --production
+scripts\radar-production.cmd
 ```
 
-The application does not contain an internal scheduler loop. Windows Task Scheduler, cron, or another external scheduler should invoke the production command at the desired interval.
+Task Scheduler shape:
 
-## Configuration
+```text
+Program/script: <absolute-local-project-path>\scripts\radar-production.cmd
+Arguments:      (empty)
+Start in:       optional
+```
 
-Primary tracked configuration files:
+Preflight task/check:
 
-- `config/radar.example.yaml` — general example configuration;
-- `config/radar.production.yaml` — stable production-oriented profile;
-- `config/search_profiles.yaml` — discovery search profiles.
+```text
+Arguments: --preflight-only
+```
 
-The production profile intentionally contains project-relative paths and environment-variable names rather than machine-specific absolute paths or secrets.
+## Configuration and secrets
 
-Telegram environment variables:
+Tracked production config: `config/radar.production.yaml`.
+
+Telegram credentials remain environment-based:
 
 ```text
 RADAR_TELEGRAM_BOT_TOKEN
 RADAR_TELEGRAM_CHAT_ID
 ```
 
-Telegram remains disabled in the tracked production profile until explicitly enabled.
+The launcher does not pass credentials on the command line. Real credentials must remain outside Git.
 
-## State and failure behavior
+## Runtime data
 
-`radar.state` stores procurement, assessment, opportunity, change-feed, recurring lifecycle, alert-history, and alert-delivery data in SQLite.
-
-Production preflight runs before recurring orchestration. A failed preflight does not create a recurring lifecycle run and does not start discovery. Once preflight succeeds, the normal R4B locking/lifecycle semantics remain unchanged.
-
-Telegram delivery failure does not invalidate Radar state or the last successfully published report.
+`runtime-logs/` is local runtime output and is ignored by Git. `RADAR_R3A1_LIVE_VALIDATION.md` is also ignored narrowly because `radar.historical_live_validation` creates it as a root-level runtime validation artifact. The ignore rule does not cover general Markdown documentation.
 
 ## Validation status
 
@@ -120,12 +122,13 @@ Telegram delivery failure does not invalidate Radar state or the last successful
 - R4C: `161 passed`
 - R4D: `168 passed`
 - R4E: `176 passed`
+- R4F: `181 passed`
 
-R4E deterministic tests cover valid preflight, missing Telegram environment values when delivery is enabled, invalid runtime paths, invalid config values, production routing through recurring orchestration, secret-safe errors, fail-fast preflight, and production execution from an unrelated current working directory.
+R4F deterministic tests cover launcher execution from an unrelated current working directory, absolute Task Scheduler launcher paths, exact preflight exit-code propagation through the CMD launcher, runtime logging, preflight argument behavior, and the narrow validation-artifact ignore rule.
 
 ## Safety and repository hygiene
 
-Real procurement documents, live HTML, SQLite state, generated reports, browser state, locks, Telegram credentials, and downloaded protocol artifacts are runtime data and must remain outside Git.
+Real procurement documents, live HTML, SQLite state, generated reports, browser state, locks, Telegram credentials, runtime logs, and downloaded protocol artifacts are runtime data and must remain outside Git.
 
 See also:
 
@@ -141,3 +144,4 @@ See also:
 - [Alert filtering](RADAR_ALERTS.md)
 - [Telegram delivery](RADAR_TELEGRAM.md)
 - [Production profile](RADAR_PRODUCTION.md)
+- [Windows deployment](RADAR_WINDOWS_DEPLOYMENT.md)
