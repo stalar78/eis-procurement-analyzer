@@ -24,6 +24,18 @@ alerts:
   significant_nmck_change_percent: 20
   urgent_deadline_days: 3
 
+telegram:
+  enabled: false
+  bot_token_env: RADAR_TELEGRAM_BOT_TOKEN
+  chat_id_env: RADAR_TELEGRAM_CHAT_ID
+  bot_token: ""
+  chat_id: ""
+  api_base_url: https://api.telegram.org
+  timeout_seconds: 10
+  max_retries: 2
+  retry_backoff_seconds: 0.5
+  max_message_chars: 3900
+
 filters:
   laws:
     - 44-FZ

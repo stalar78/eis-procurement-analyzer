@@ -26,6 +26,7 @@ from radar.scoring import assess_card
 from radar.search_profiles import load_search_profiles, select_profiles
 from radar.source_resolution import resolve_procurement_source
 from radar.state import RadarState
+from radar.telegram_delivery import deliver_alert_feed
 
 
 def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
@@ -110,6 +111,10 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
     parser.add_argument("--lock-stale-minutes", type=int)
     parser.add_argument("--retain-runs", type=int)
     parser.add_argument("--retain-failed-runs", type=int)
+    parser.add_argument("--send-telegram-alerts", action="store_true")
+    parser.add_argument("--no-send-telegram-alerts", action="store_true")
+    parser.add_argument("--telegram-bot-token")
+    parser.add_argument("--telegram-chat-id")
     return parser.parse_args(argv)
 
 
@@ -132,6 +137,14 @@ def run(argv: list[str] | None = None) -> int:
         config.recurring.retain_successful_runs = args.retain_runs
     if args.retain_failed_runs is not None:
         config.recurring.retain_failed_runs = args.retain_failed_runs
+    if args.send_telegram_alerts:
+        config.telegram.enabled = True
+    if args.no_send_telegram_alerts:
+        config.telegram.enabled = False
+    if args.telegram_bot_token:
+        config.telegram.bot_token = args.telegram_bot_token
+    if args.telegram_chat_id:
+        config.telegram.chat_id = args.telegram_chat_id
     if args.max_documents_per_procurement is not None:
         config.enrichment.max_documents_per_procurement = args.max_documents_per_procurement
     if args.max_total_download_mb is not None:
@@ -526,6 +539,12 @@ def _run_pipeline(args: argparse.Namespace, config, profiles, as_of: datetime, s
             as_of,
         )
         diagnostics["alert_feed"] = state.save_alert_history(run_id, alert_feed)
+        diagnostics["telegram_delivery"] = deliver_alert_feed(
+            diagnostics["alert_feed"],
+            config.telegram,
+            state,
+            run_id=run_id,
+        )
         if enrichment_result is not None:
             state.save_enrichment_run(
                 enrichment_run_id=f"enrich_{run_id}",

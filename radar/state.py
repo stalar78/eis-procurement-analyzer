@@ -110,6 +110,41 @@ class RadarState:
         )
         cur.execute(
             """
+            CREATE TABLE IF NOT EXISTS alert_delivery_attempts (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                alert_fingerprint TEXT,
+                channel TEXT,
+                chat_id TEXT,
+                status TEXT,
+                attempted_at TEXT,
+                delivered_at TEXT,
+                run_id TEXT,
+                attempt_count INTEGER,
+                error_message TEXT,
+                response_json TEXT
+            )
+            """
+        )
+        cur.execute(
+            """
+            CREATE TABLE IF NOT EXISTS alert_delivery_chunks (
+                chunk_key TEXT PRIMARY KEY,
+                alert_fingerprint TEXT,
+                channel TEXT,
+                chat_id TEXT,
+                chunk_index INTEGER,
+                chunk_count INTEGER,
+                status TEXT,
+                attempted_at TEXT,
+                delivered_at TEXT,
+                run_id TEXT,
+                error_message TEXT,
+                response_json TEXT
+            )
+            """
+        )
+        cur.execute(
+            """
             CREATE TABLE IF NOT EXISTS procurements (
                 procurement_number TEXT PRIMARY KEY,
                 current_json TEXT NOT NULL,
@@ -508,6 +543,100 @@ class RadarState:
             emitted.append(alert)
         self.connection.commit()
         return emitted
+
+    def was_alert_delivered(self, alert_fingerprint: str, channel: str, chat_id: str) -> bool:
+        row = self.connection.execute(
+            """
+            SELECT 1 FROM alert_delivery_attempts
+            WHERE alert_fingerprint = ? AND channel = ? AND chat_id = ? AND status = 'SENT'
+            LIMIT 1
+            """,
+            (alert_fingerprint, channel, chat_id),
+        ).fetchone()
+        return row is not None
+
+    def record_alert_delivery(
+        self,
+        *,
+        alert_fingerprint: str,
+        channel: str,
+        chat_id: str,
+        status: str,
+        attempted_at: str,
+        delivered_at: str = "",
+        run_id: str = "",
+        attempt_count: int = 0,
+        error_message: str = "",
+        response: dict[str, Any] | None = None,
+    ) -> None:
+        self.connection.execute(
+            """
+            INSERT INTO alert_delivery_attempts
+            (alert_fingerprint, channel, chat_id, status, attempted_at, delivered_at,
+             run_id, attempt_count, error_message, response_json)
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+            """,
+            (
+                alert_fingerprint,
+                channel,
+                chat_id,
+                status,
+                attempted_at,
+                delivered_at,
+                run_id,
+                attempt_count,
+                error_message,
+                json.dumps(response or {}, ensure_ascii=False),
+            ),
+        )
+        self.connection.commit()
+
+    def was_alert_chunk_delivered(self, chunk_key: str) -> bool:
+        row = self.connection.execute(
+            "SELECT 1 FROM alert_delivery_chunks WHERE chunk_key = ? AND status = 'SENT' LIMIT 1",
+            (chunk_key,),
+        ).fetchone()
+        return row is not None
+
+    def record_alert_chunk_delivery(
+        self,
+        *,
+        chunk_key: str,
+        alert_fingerprint: str,
+        channel: str,
+        chat_id: str,
+        chunk_index: int,
+        chunk_count: int,
+        status: str,
+        attempted_at: str,
+        delivered_at: str = "",
+        run_id: str = "",
+        error_message: str = "",
+        response: dict[str, Any] | None = None,
+    ) -> None:
+        self.connection.execute(
+            """
+            INSERT OR REPLACE INTO alert_delivery_chunks
+            (chunk_key, alert_fingerprint, channel, chat_id, chunk_index, chunk_count,
+             status, attempted_at, delivered_at, run_id, error_message, response_json)
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+            """,
+            (
+                chunk_key,
+                alert_fingerprint,
+                channel,
+                chat_id,
+                chunk_index,
+                chunk_count,
+                status,
+                attempted_at,
+                delivered_at,
+                run_id,
+                error_message,
+                json.dumps(response or {}, ensure_ascii=False),
+            ),
+        )
+        self.connection.commit()
 
     def get_current(self, procurement_number: str) -> sqlite3.Row | None:
         cur = self.connection.execute(

@@ -40,6 +40,20 @@ class AlertConfig:
 
 
 @dataclass
+class TelegramConfig:
+    enabled: bool = False
+    bot_token_env: str = "RADAR_TELEGRAM_BOT_TOKEN"
+    chat_id_env: str = "RADAR_TELEGRAM_CHAT_ID"
+    bot_token: str = ""
+    chat_id: str = ""
+    api_base_url: str = "https://api.telegram.org"
+    timeout_seconds: int = 10
+    max_retries: int = 2
+    retry_backoff_seconds: float = 0.5
+    max_message_chars: int = 3900
+
+
+@dataclass
 class FilterConfig:
     laws: list[str] = field(default_factory=lambda: ["44-FZ", "223-FZ"])
     statuses: list[str] = field(default_factory=lambda: ["application_submission"])
@@ -218,6 +232,7 @@ class RadarConfig:
     radar: RadarRuntimeConfig = field(default_factory=RadarRuntimeConfig)
     recurring: RecurringConfig = field(default_factory=RecurringConfig)
     alerts: AlertConfig = field(default_factory=AlertConfig)
+    telegram: TelegramConfig = field(default_factory=TelegramConfig)
     filters: FilterConfig = field(default_factory=FilterConfig)
     scoring: ScoringConfig = field(default_factory=ScoringConfig)
     enrichment: EnrichmentConfig = field(default_factory=EnrichmentConfig)
@@ -245,6 +260,7 @@ def load_config(path: str | Path | None = None) -> RadarConfig:
     _merge_dataclass(config.radar, data.get("radar", {}))
     _merge_dataclass(config.recurring, data.get("recurring", {}))
     _merge_dataclass(config.alerts, data.get("alerts", {}))
+    _merge_dataclass(config.telegram, data.get("telegram", {}))
     _merge_dataclass(config.filters, data.get("filters", {}))
     _merge_dataclass(config.scoring, data.get("scoring", {}))
     _merge_dataclass(config.enrichment, data.get("enrichment", {}))
