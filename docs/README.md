@@ -23,6 +23,7 @@ This directory contains the public technical documentation for EIS Procurement A
 - [R4C alert filtering](RADAR_ALERTS.md) — notification-ready filtering, priority, deduplication, fingerprints, and alert reporting.
 - [R4D Telegram delivery](RADAR_TELEGRAM.md) — outbound Telegram delivery, credentials, retries, duplicate suppression, chunk persistence, and failure isolation.
 - [R4E production profile](RADAR_PRODUCTION.md) — production config, preflight, stable path resolution, secret handling, and external-scheduler runtime contract.
+- [R4F Windows deployment](RADAR_WINDOWS_DEPLOYMENT.md) — Windows launcher, Task Scheduler command contract, runtime logs, exit-code propagation, and deployment boundaries.
 
 ## Source of truth
 
@@ -33,6 +34,7 @@ Implementation and regression tests are the final source of truth for current be
 - `collect_candidate_details.py`
 - `analyze_candidate_documents.py`
 - `radar/`
+- `scripts/radar-production.cmd`
 - `tests/test_radar_*.py`
 - `tests/test_strict_extraction.py`
 
@@ -40,6 +42,6 @@ Documentation explains the architecture and public contract but must not be used
 
 ## Public-data rule
 
-Do not place downloaded procurement documents, live page snapshots, generated analysis outputs, local datasets, SQLite state, browser storage, screenshots with personal data, cookies, tokens, secrets, Telegram credentials, or machine-specific paths in this directory.
+Do not place downloaded procurement documents, live page snapshots, generated analysis outputs, local datasets, SQLite state, browser storage, screenshots with personal data, cookies, tokens, secrets, Telegram credentials, runtime logs, or machine-specific paths in this directory.
 
 Use only synthetic/test-oriented fixtures and fictional examples for public demonstrations.
