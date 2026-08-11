@@ -4,14 +4,15 @@
 
 EIS Procurement Radar is the stateful decision-support layer of EIS Procurement Analyzer. It turns live EIS search results into a bounded, explainable pipeline for identifying procurements worth manual review and tracking meaningful changes across recurring runs.
 
-Current Radar version: `0.4.0-r4a-change-feed`.
+Current Radar version: `0.4.1-r4b-orchestration`.
 
 The Radar is intentionally conservative. It does not submit applications or replace legal/commercial review.
 
 ## End-to-end flow
 
 ```text
-active EIS discovery
+recurring orchestration / lock
+    -> active EIS discovery
     -> deduplication and state
     -> provisional eligibility/scoring
     -> detail-page open verification
@@ -23,7 +24,8 @@ active EIS discovery
     -> recurring-state comparison / change feed
     -> controlled document enrichment
     -> deep assessment
-    -> final manual-review recommendation
+    -> transactional publication
+    -> lifecycle record + retention
 ```
 
 ## Main layers
@@ -50,23 +52,28 @@ Historical evidence adjusts but does not overwrite the preliminary assessment.
 
 `radar.opportunities` adds evidence-backed historical failure classification, bounded failed-history discovery, republication matching, and a separate opportunity score.
 
-The model distinguishes no applications, single application, all rejected, no admitted applications, cancellation, contract-not-concluded, and unknown failure. Missing winner or price is not enough to infer zero applications.
-
 ### Recurring change feed
 
 R4A reuses the existing SQLite state rather than introducing a parallel persistence model. Each saved run can emit `ChangeFeedEvent` records only for meaningful transitions.
 
-Examples include:
+Examples include `NEW_PROCUREMENT`, deadline/NMCK/status changes, score/decision changes, `PROCUREMENT_CLOSED`, `NEW_OPPORTUNITY`, `OPPORTUNITY_UPDATED`, and `OPPORTUNITY_NO_LONGER_ACTIVE`.
 
-- `NEW_PROCUREMENT`;
-- deadline, NMCK, or status changes;
-- preliminary/history score and decision changes;
-- `PROCUREMENT_CLOSED`;
-- `NEW_OPPORTUNITY`;
-- `OPPORTUNITY_UPDATED`;
-- `OPPORTUNITY_NO_LONGER_ACTIVE`.
+Repeated identical runs are idempotent and should emit no change-feed noise.
 
-Events preserve previous/current values and an explanation where applicable. Repeated identical runs are idempotent: an unchanged second run should emit no change-feed noise.
+### Recurring orchestration
+
+R4B adds the operational shell needed for unattended external scheduling.
+
+`radar.orchestration` provides:
+
+- atomic `radar.lock` acquisition for recurring runs;
+- stale-lock recovery after a configurable timeout;
+- distinct success, locked/skipped, and failure exit codes;
+- bounded retention for archived successful and failed runtime directories.
+
+`radar.state` stores append-only recurring lifecycle records with statuses `STARTED`, `SUCCESS`, `FAILED`, and `SKIPPED_LOCKED`.
+
+A failed recurring run does not replace the last successful published result, and lock release is handled through the failure path so a later run can continue normally.
 
 ### Enrichment
 
@@ -74,13 +81,13 @@ Events preserve previous/current values and an explanation where applicable. Rep
 
 ### State and resilience
 
-`radar.state` stores run/state data in SQLite. Existing procurement, assessment, opportunity, transition, and change tables are reused for recurring monitoring.
+`radar.state` stores procurement, assessment, opportunity, transition, change-feed, and recurring-run lifecycle data in SQLite.
 
 `radar.source_resolution` provides bounded recovery when EIS URLs are stale or intermittently unavailable.
 
 ### Reporting
 
-`radar.reporting` writes structured reports and supports transactional publication. R4A adds the change feed to runtime JSON/CSV outputs and to the normal XLSX/Markdown reporting surfaces.
+`radar.reporting` writes structured reports and supports transactional publication. The latest attempted run and last publishable successful result remain separable.
 
 ## Configuration
 
@@ -89,7 +96,7 @@ Primary examples:
 - `config/radar.example.yaml`
 - `config/search_profiles.yaml`
 
-Important configuration areas include discovery, scoring, enrichment, historical intelligence, resilience, and opportunity/failure-history limits.
+R4B adds a `recurring` configuration block for stale-lock timeout and successful/failed runtime retention counts.
 
 ## Core CLI
 
@@ -97,7 +104,9 @@ Important configuration areas include discovery, scoring, enrichment, historical
 .\.venv\Scripts\python.exe -m radar.runner --help
 ```
 
-Use the CLI help as the final source of truth for current flags.
+Recurring mode is enabled with `--recurring`. CLI overrides are available for stale-lock timeout and retention limits.
+
+The Radar does not contain an internal cron loop; an external scheduler should invoke the recurring command at the desired interval.
 
 ## Decision philosophy
 
@@ -106,22 +115,24 @@ The Radar separates evidence layers deliberately:
 - a technically attractive procurement can still have poor historical economics;
 - missing historical data is not a rejection signal;
 - historical failure is not automatically a positive signal;
-- zero applications is different from cancellation or all applications being rejected;
-- a failed historical procedure is not itself a current opportunity;
 - a current procurement must still be open and technically eligible;
 - recurring monitoring should surface meaningful changes rather than repeat unchanged cards;
+- a failed unattended run must not destroy the last useful published result;
+- overlapping recurring runs should be skipped rather than executed concurrently;
 - partial protocol evidence contributes only to the metric it supports;
 - low-confidence metrics remain low-confidence in the final report.
 
 ## Validation status
 
-R3B.1 validated the live failed-history path against real EIS data and confirmed two real `SINGLE_APPLICATION` events from protocol pages.
+R3B.1 validated the live failed-history path against real EIS data.
 
-R4A was accepted with `151 passed`. A two-run validation using one SQLite database produced 12 `NEW_PROCUREMENT` events on the baseline run and zero new/changed/change-feed events on the identical second run.
+R4A was accepted with `151 passed` and demonstrated idempotent two-run state comparison.
+
+R4B was accepted with `156 passed`. Deterministic orchestration tests cover locking, stale-lock recovery, failure recovery, lifecycle persistence, and retention. A two-run validation on one SQLite database produced `STARTED -> SUCCESS` twice, while the second identical run reported `new=0`, `changed=0`, and no change-feed events.
 
 ## Safety and repository hygiene
 
-Real procurement documents, live HTML, SQLite state, generated reports, browser state, and downloaded protocol artifacts are runtime data and must remain outside Git.
+Real procurement documents, live HTML, SQLite state, generated reports, browser state, locks, and downloaded protocol artifacts are runtime data and must remain outside Git.
 
 See also:
 
@@ -133,3 +144,4 @@ See also:
 - [Result extraction](RADAR_RESULT_EXTRACTION.md)
 - [Opportunity intelligence](RADAR_OPPORTUNITIES.md)
 - [Recurring change feed](RADAR_CHANGE_FEED.md)
+- [Recurring orchestration](RADAR_ORCHESTRATION.md)
