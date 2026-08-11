@@ -574,6 +574,25 @@ class ProcurementFailureEvent:
 
 
 @dataclass
+class FailureDiscoveryDiagnostic:
+    mode: str
+    query: str
+    law: str
+    url: str
+    request_params: dict[str, Any] = field(default_factory=dict)
+    page_number: int = 1
+    http_status: int | None = None
+    raw_cards: int = 0
+    parsed_cards: int = 0
+    unique_cards: int = 0
+    errors: list[str] = field(default_factory=list)
+    warnings: list[str] = field(default_factory=list)
+
+    def to_dict(self) -> dict[str, Any]:
+        return asdict(self)
+
+
+@dataclass
 class OpportunityTransition:
     procurement_number: str
     transition_type: str

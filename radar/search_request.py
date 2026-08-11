@@ -10,7 +10,7 @@ from urllib.parse import parse_qs, urlencode, urlparse, urlunparse
 from radar.config import RadarConfig
 
 
-DISCOVERY_MODES = {"ACTIVE_ONLY", "ACTIVE_AND_RECENT", "ALL_STATUSES", "COMPLETED_ONLY", "COMPLETED_AND_FAILED", "CUSTOMER_HISTORY", "SUPPLIER_HISTORY", "OFFLINE"}
+DISCOVERY_MODES = {"ACTIVE_ONLY", "ACTIVE_AND_RECENT", "ALL_STATUSES", "COMPLETED_ONLY", "COMPLETED_AND_FAILED", "FAILED_ONLY", "FAILED_AND_COMPLETED", "CUSTOMER_HISTORY", "SUPPLIER_HISTORY", "OFFLINE"}
 STATUS_PARAMS = {
     "application_submission": "af",
     "commission_review": "ca",
@@ -87,6 +87,10 @@ def build_eis_search_request(
         included = ["completed"]
     elif mode == "COMPLETED_AND_FAILED":
         included = ["completed", "cancelled"]
+    elif mode == "FAILED_ONLY":
+        included = ["completed", "cancelled"]
+    elif mode == "FAILED_AND_COMPLETED":
+        included = ["completed", "cancelled"]
     elif mode in {"CUSTOMER_HISTORY", "SUPPLIER_HISTORY"}:
         included = ["completed", "cancelled"]
     elif mode == "ACTIVE_AND_RECENT":
@@ -135,6 +139,9 @@ def serialize_eis_search_request(request: SearchRequest, base_url: str) -> str:
         param = STATUS_PARAMS.get(status)
         if param:
             params[param] = ["on"]
+    if request.discovery_mode in {"FAILED_ONLY", "FAILED_AND_COMPLETED"}:
+        params["pc"] = ["on"]
+        params["pa"] = ["on"]
     if request.published_from:
         params["publishDateFrom"] = [request.published_from]
     if request.published_to:
@@ -149,7 +156,16 @@ def serialize_eis_search_request(request: SearchRequest, base_url: str) -> str:
 def request_from_url(url: str, source_profile: str = "") -> SearchRequest:
     params = parse_qs(urlparse(url).query)
     included = [name for name, param in STATUS_PARAMS.items() if param in params]
-    mode = "ALL_STATUSES" if {"pc", "pa"} & set(params) else ("COMPLETED_ONLY" if "pc" in params else "ACTIVE_ONLY")
+    if params.get("pa") and params.get("pc"):
+        mode = "FAILED_ONLY" if "af" not in params and "ca" not in params else "FAILED_AND_COMPLETED"
+    elif params.get("pa"):
+        mode = "FAILED_ONLY"
+    elif "pc" in params and "af" not in params and "ca" not in params:
+        mode = "COMPLETED_ONLY"
+    elif {"pc", "pa"} & set(params):
+        mode = "ALL_STATUSES"
+    else:
+        mode = "ACTIVE_ONLY"
     return SearchRequest(
         query_text=params.get("searchString", [""])[0],
         discovery_mode=mode,

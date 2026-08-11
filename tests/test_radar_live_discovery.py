@@ -43,6 +43,18 @@ def test_all_statuses_preserves_research_behavior() -> None:
     assert {"af", "ca", "pc", "pa"}.issubset(params)
 
 
+def test_failed_only_search_request_uses_completed_and_cancelled_without_active_flags() -> None:
+    config = RadarConfig()
+    req = build_eis_search_request("Р»РёС‡РЅС‹Р№ РєР°Р±РёРЅРµС‚", config, discovery_mode="FAILED_ONLY")
+    url = serialize_eis_search_request(req, BASE)
+    params = parse_qs(urlparse(url).query)
+    assert params["pc"] == ["on"]
+    assert params["pa"] == ["on"]
+    assert "af" not in params
+    assert "ca" not in params
+    assert request_from_url(url).discovery_mode == "FAILED_ONLY"
+
+
 def test_pagination_preserves_filter_fingerprint() -> None:
     config = RadarConfig()
     req1 = build_eis_search_request("веб", config, page_number=1)

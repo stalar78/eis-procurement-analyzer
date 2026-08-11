@@ -278,6 +278,19 @@ def write_reports(
             (target / name).write_text(json.dumps(payload, ensure_ascii=False, indent=2), encoding="utf-8")
         write_simple_csv(target / "analog_review.csv", live_validation.get("analog_review", []))
         write_simple_csv(target / "historical_live_diagnostics.csv", [live_validation.get("diagnostics", {})])
+    failure_discovery = diagnostics.get("failure_discovery")
+    if failure_discovery:
+        for name, payload in [
+            ("failure_discovery_diagnostics.json", failure_discovery.get("diagnostics", [])),
+            ("failure_candidates.json", failure_discovery.get("unique_candidates", [])),
+            ("failure_resolution.json", failure_discovery.get("usable_results", [])),
+            ("republication_candidates.json", [item.to_dict() if hasattr(item, "to_dict") else item for item in failure_discovery.get("republication_links", [])]),
+            ("republication_links_live.json", failure_discovery.get("republication_links", [])),
+            ("live_opportunities.json", failure_discovery.get("opportunities", [])),
+        ]:
+            (target / name).write_text(json.dumps(payload, ensure_ascii=False, indent=2), encoding="utf-8")
+        write_simple_csv(target / "failure_discovery_diagnostics.csv", failure_discovery.get("diagnostics", []))
+        write_simple_csv(target / "failure_resolution.csv", failure_discovery.get("usable_results", []))
 
     manifest = {
         "run_id": run_id,

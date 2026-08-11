@@ -16,8 +16,8 @@ from radar.historical_live_validation import (
     validate_live_history_args,
 )
 from radar.live_collection import normalize_eis_url
-from radar.models import RadarCard
-from radar.opportunities import assess_failed_opportunities
+from radar.models import EligibilityStatus, RadarAssessment, RadarCard, RadarDecision
+from radar.opportunities import assess_failed_opportunities, assess_failure_history
 from radar.prefilter import evaluate_eligibility, parse_as_of
 from radar.reporting import write_reports
 from radar.scoring import assess_card
@@ -60,7 +60,7 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
     parser.add_argument("--resume-enrichment", action="store_true")
     parser.add_argument("--enrichment-only", action="store_true")
     parser.add_argument("--offline-enrichment-input")
-    parser.add_argument("--discovery-mode", choices=["ACTIVE_ONLY", "ACTIVE_AND_RECENT", "ALL_STATUSES", "COMPLETED_ONLY", "COMPLETED_AND_FAILED", "CUSTOMER_HISTORY", "SUPPLIER_HISTORY"])
+    parser.add_argument("--discovery-mode", choices=["ACTIVE_ONLY", "ACTIVE_AND_RECENT", "ALL_STATUSES", "COMPLETED_ONLY", "COMPLETED_AND_FAILED", "FAILED_ONLY", "FAILED_AND_COMPLETED", "CUSTOMER_HISTORY", "SUPPLIER_HISTORY"])
     parser.add_argument("--history", action="store_true")
     parser.add_argument("--no-history", action="store_true")
     parser.add_argument("--history-only", action="store_true")
@@ -310,7 +310,8 @@ def run(argv: list[str] | None = None) -> int:
     else:
         diagnostics["historical_enabled"] = False
 
-    if config.opportunities.enabled or args.failure_history_only:
+    failure_history_live_results = []
+    if (config.opportunities.enabled or args.failure_history_only) and cards:
         previous_opportunities = {}
         if state is not None:
             previous_opportunities = {
@@ -327,6 +328,45 @@ def run(argv: list[str] | None = None) -> int:
         )
         opportunities = opportunity_result.opportunities
         diagnostics["opportunities"] = opportunity_result.to_dict()
+    elif config.opportunities.enabled or args.failure_history_only:
+        diagnostics["failed_opportunity_fallback_reason"] = "NO_CURRENT_OPEN_CARDS_AFTER_ACTIVE_VERIFICATION"
+        fallback_card = next((card for card in cards if card.status_normalized == "COMPLETED"), None) or (cards[0] if cards else None)
+        if fallback_card is None:
+            fallback_query = ""
+            if diagnostics.get("search_diagnostics"):
+                fallback_query = diagnostics["search_diagnostics"][0].get("query", "")
+            if not fallback_query and explicit_queries:
+                fallback_query = explicit_queries[0]
+            if not fallback_query and profiles:
+                fallback_query = profiles[0].queries[0] if profiles[0].queries else ""
+            fallback_card = RadarCard(
+                procurement_number="R3B1_HISTORICAL_SEED",
+                title=fallback_query,
+                customer="",
+                law="",
+                published_at=started_at.isoformat(timespec="seconds"),
+                status_normalized="COMPLETED",
+                raw_text=fallback_query,
+            )
+        fallback_assessment = next((assessment for assessment in assessments if assessment.procurement_number == getattr(fallback_card, "procurement_number", "")), None)
+        if fallback_assessment is None:
+            fallback_assessment = RadarAssessment(
+                procurement_number=fallback_card.procurement_number,
+                eligibility_status=EligibilityStatus.CLOSED,
+                days_to_deadline=None,
+                total_score=0,
+                radar_decision=RadarDecision.INSUFFICIENT_DATA,
+            )
+        if fallback_card is not None and fallback_assessment is not None:
+            fallback = assess_failure_history(
+                fallback_card,
+                fallback_assessment,
+                config,
+                as_of=as_of,
+                offline_failure_input=args.offline_failure_input,
+            )
+            failure_history_live_results.append(fallback)
+            diagnostics["failure_discovery"] = fallback.to_dict()
 
     finished_at = datetime.now(as_of.tzinfo)
     enrichment_result = None

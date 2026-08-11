@@ -3,13 +3,17 @@ from __future__ import annotations
 import json
 from datetime import datetime
 from pathlib import Path
+from zoneinfo import ZoneInfo
 
 from radar.config import RadarConfig
 from radar.discovery import normalize_card
 from radar.models import EligibilityStatus, NoCompetitionOpportunity, RadarAssessment, RadarDecision
 from radar.opportunities import (
     assess_failed_opportunities,
+    assess_failure_history,
+    build_failure_query_plan,
     classify_failure_event,
+    discover_failure_history,
     detect_opportunity_transitions,
     failure_competition_signal,
     load_failure_events,
@@ -163,3 +167,91 @@ def test_no_secret_or_local_paths_in_fixtures() -> None:
     assert "c:\\users\\" not in lowered
     assert "password" not in lowered
     assert "token" not in lowered
+
+
+def test_failure_query_plan_has_fallback_when_customer_missing() -> None:
+    config = RadarConfig()
+    card = normalize_card(
+        {
+            "procurement_number": "1",
+            "title": "Portal personal account workflow API development",
+            "status_normalized": "COMPLETED",
+            "raw_text": "Portal personal account workflow API development",
+        }
+    )
+    plan = build_failure_query_plan(card, config)
+    assert plan
+    assert plan[0]["mode"] == "FAILED_ONLY"
+
+
+def test_discover_failure_history_distinguishes_zero_results_from_query_errors(tmp_path: Path) -> None:
+    config = RadarConfig()
+    config.opportunities.failure_history.maximum_queries_per_procurement = 1
+    config.opportunities.failure_history.maximum_result_resolutions = 0
+    card = current_card()
+
+    def collector(_request, _config, _limit, _pages):
+        return []
+
+    result = discover_failure_history(card, config, collector=collector, cache_dir=tmp_path)
+    assert result.diagnostics_summary["raw_cards"] == 0
+    assert result.diagnostics_summary["query_errors"] == 0
+    assert result.diagnostics_summary["zero_result_queries"] == 1
+    assert "ZERO_RESULTS" in result.diagnostics[0].warnings
+
+
+def test_failure_discovery_uses_failure_history_lookback_window(tmp_path: Path) -> None:
+    config = RadarConfig()
+    config.opportunities.failure_history.lookback_days = 365
+    config.opportunities.failure_history.maximum_queries_per_procurement = 1
+    config.opportunities.failure_history.maximum_result_resolutions = 0
+    captured = {}
+
+    def collector(request, _config, _limit, _pages):
+        captured["published_from"] = request.published_from
+        captured["published_to"] = request.published_to
+        captured["mode"] = request.discovery_mode
+        return []
+
+    discover_failure_history(
+        current_card(),
+        config,
+        as_of=datetime(2026, 8, 11, tzinfo=ZoneInfo("Europe/Moscow")),
+        collector=collector,
+        cache_dir=tmp_path,
+    )
+    assert captured == {"published_from": "11.08.2025", "published_to": "11.08.2026", "mode": "FAILED_ONLY"}
+
+
+def test_assess_failure_history_collects_live_failure_events(tmp_path: Path) -> None:
+    config = RadarConfig()
+    config.opportunities.failure_history.maximum_queries_per_procurement = 1
+    config.opportunities.failure_history.maximum_result_resolutions = 1
+    card = current_card()
+    current = normalize_card(
+        {
+            "procurement_number": "20000000000000000001",
+            "title": card.title,
+            "customer": card.customer,
+            "law": "44-FZ",
+            "procedure_type": card.procedure_type,
+            "region": card.region,
+            "status_raw": "Определение поставщика завершено",
+            "status_normalized": "COMPLETED",
+            "nmck": 1750000,
+            "source_url": "https://zakupki.gov.ru/epz/order/notice/ea20/view/common-info.html?regNumber=20000000000000000001",
+            "published_at": "2026-01-01T10:00:00+03:00",
+            "updated_at": "2026-01-05T10:00:00+03:00",
+        }
+    )
+
+    def collector(_request, _config, _limit, _pages):
+        return [current]
+
+    def fetch(_url: str):
+        return "Цена контракта 10 000 руб. Участников 1. Победитель ООО Тест"
+
+    result = assess_failure_history(card, assessment(card), config, collector=collector, result_fetch=fetch, cache_dir=tmp_path)
+    assert result.failure_events
+    assert result.failure_events[0].failure_type == "SINGLE_APPLICATION"
+    assert result.diagnostics_summary["result_resolution_attempts"] == 1

@@ -10,9 +10,12 @@ from typing import Any
 from radar import opportunity_intelligence_version
 from radar.analog_search import extract_functional_terms, normalize_text, normalize_tokens
 from radar.config import RadarConfig
+from radar.discovery import deduplicate_cards
 from radar.historical import budget_similarity
 from radar.models import (
     EligibilityStatus,
+    FailureDiscoveryDiagnostic,
+    HistoricalAnalog,
     NoCompetitionOpportunity,
     OpportunityTransition,
     ProcurementFailureEvent,
@@ -21,6 +24,8 @@ from radar.models import (
     RadarDecision,
     RepeatedProcurementLink,
 )
+from radar.historical_live_validation import collect_result_for_analog
+from radar.search_request import build_eis_search_request, redact_url, serialize_eis_search_request
 from radar.prefilter import parse_datetime
 
 
@@ -59,8 +64,169 @@ class OpportunityAssessmentResult:
         }
 
 
+@dataclass
+class FailureDiscoveryResult:
+    query_plan: list[dict[str, Any]] = field(default_factory=list)
+    diagnostics: list[FailureDiscoveryDiagnostic] = field(default_factory=list)
+    raw_candidates: list[dict[str, Any]] = field(default_factory=list)
+    parsed_candidates: list[dict[str, Any]] = field(default_factory=list)
+    unique_candidates: list[dict[str, Any]] = field(default_factory=list)
+    failure_events: list[ProcurementFailureEvent] = field(default_factory=list)
+    republication_links: list[RepeatedProcurementLink] = field(default_factory=list)
+    opportunities: list[NoCompetitionOpportunity] = field(default_factory=list)
+    usable_results: list[dict[str, Any]] = field(default_factory=list)
+    result_resolution_failures: list[dict[str, Any]] = field(default_factory=list)
+    diagnostics_summary: dict[str, Any] = field(default_factory=dict)
+
+    def to_dict(self) -> dict[str, Any]:
+        return {
+            "query_plan": self.query_plan,
+            "diagnostics": [item.to_dict() for item in self.diagnostics],
+            "raw_candidates": self.raw_candidates,
+            "parsed_candidates": self.parsed_candidates,
+            "unique_candidates": self.unique_candidates,
+            "failure_events": [item.to_dict() for item in self.failure_events],
+            "republication_links": [item.to_dict() for item in self.republication_links],
+            "opportunities": [item.to_dict() for item in self.opportunities],
+            "usable_results": self.usable_results,
+            "result_resolution_failures": self.result_resolution_failures,
+            "diagnostics_summary": self.diagnostics_summary,
+        }
+
+
 def _now() -> str:
     return datetime.now().astimezone().isoformat(timespec="seconds")
+
+
+def build_failure_query_plan(card: RadarCard, config: RadarConfig) -> list[dict[str, Any]]:
+    queries = []
+    source_terms = extract_functional_terms(f"{card.title} {card.raw_text}")
+    exact = normalize_text(card.title).split()[:5]
+    if exact:
+        queries.append(
+            {
+                "query_text": " ".join(exact[:4]),
+                "query_type": "FAILURE_TITLE_EXACT",
+                "law": card.law or "all",
+                "completed_only": True,
+                "mode": "FAILED_ONLY",
+                "page_limit": config.opportunities.failure_history.maximum_pages_per_query,
+                "candidate_limit": config.opportunities.failure_history.maximum_candidates,
+            }
+        )
+    if card.customer:
+        queries.append(
+            {
+                "query_text": f"{card.customer} {' '.join(exact[:3])}".strip(),
+                "query_type": "FAILURE_CUSTOMER_SUBJECT",
+                "law": card.law or "all",
+                "completed_only": True,
+                "mode": "FAILED_ONLY",
+                "page_limit": config.opportunities.failure_history.maximum_pages_per_query,
+                "candidate_limit": config.opportunities.failure_history.maximum_candidates,
+            }
+        )
+        if source_terms:
+            queries.append(
+                {
+                    "query_text": f"{card.customer} {source_terms[0]}",
+                    "query_type": "FAILURE_CUSTOMER_CATEGORY",
+                    "law": card.law or "all",
+                    "completed_only": True,
+                    "mode": "FAILED_ONLY",
+                    "page_limit": config.opportunities.failure_history.maximum_pages_per_query,
+                    "candidate_limit": config.opportunities.failure_history.maximum_candidates,
+                }
+            )
+    if source_terms:
+        queries.append(
+            {
+                "query_text": " ".join(source_terms[:3]),
+                "query_type": "FAILURE_FUNCTIONAL_PHRASE",
+                "law": card.law or "all",
+                "completed_only": True,
+                "mode": "FAILED_ONLY",
+                "page_limit": config.opportunities.failure_history.maximum_pages_per_query,
+                "candidate_limit": config.opportunities.failure_history.maximum_candidates,
+            }
+        )
+    if not queries:
+        fallback_query = " ".join(token for token in exact[:4] if token)
+        if not fallback_query:
+            fallback_query = " ".join(source_terms[:3])
+        if fallback_query:
+            queries.append(
+                {
+                    "query_text": fallback_query,
+                    "query_type": "FAILURE_FALLBACK_TITLE",
+                    "law": card.law or "all",
+                    "completed_only": True,
+                    "mode": "FAILED_ONLY",
+                    "page_limit": config.opportunities.failure_history.maximum_pages_per_query,
+                    "candidate_limit": config.opportunities.failure_history.maximum_candidates,
+                }
+            )
+    unique: list[dict[str, Any]] = []
+    seen: set[str] = set()
+    for item in queries[: config.opportunities.failure_history.maximum_queries_per_procurement]:
+        key = json.dumps(item, ensure_ascii=False, sort_keys=True)
+        if key in seen:
+            continue
+        seen.add(key)
+        unique.append(item)
+    return unique
+
+
+def build_failure_request_diagnostics(card: RadarCard, config: RadarConfig, as_of: datetime | None = None) -> tuple[list[dict[str, Any]], list[dict[str, Any]]]:
+    request_rows = []
+    diagnostics_rows = []
+    for item in build_failure_query_plan(card, config):
+        request = build_eis_search_request(
+            item["query_text"],
+            config,
+            source_profile="r3b1-failure-discovery",
+            as_of=as_of,
+            published_within_days=config.opportunities.failure_history.lookback_days,
+            discovery_mode=item["mode"],
+        )
+        url = serialize_eis_search_request(request, "https://zakupki.gov.ru/epz/order/extendedsearch/results.html")
+        request_rows.append(
+            {
+                "mode": request.discovery_mode,
+                "query": request.query_text,
+                "law": request.law,
+                "url": redact_url(url),
+                "request_params": {
+                    "pc": request.discovery_mode in {"FAILED_ONLY", "FAILED_AND_COMPLETED", "COMPLETED_ONLY", "COMPLETED_AND_FAILED"},
+                    "pa": request.discovery_mode in {"FAILED_ONLY", "FAILED_AND_COMPLETED"},
+                    "af": request.discovery_mode == "ACTIVE_ONLY",
+                    "publishDateFrom": request.published_from,
+                    "publishDateTo": request.published_to,
+                    "pageNumber": request.page_number,
+                },
+            }
+        )
+        diagnostics_rows.append(
+            {
+                "mode": request.discovery_mode,
+                "query": request.query_text,
+                "law": request.law,
+                "url": redact_url(url),
+                "request_params": {
+                    "pc": request.discovery_mode in {"FAILED_ONLY", "FAILED_AND_COMPLETED", "COMPLETED_ONLY", "COMPLETED_AND_FAILED"},
+                    "pa": request.discovery_mode in {"FAILED_ONLY", "FAILED_AND_COMPLETED"},
+                    "af": request.discovery_mode == "ACTIVE_ONLY",
+                },
+                "page_number": request.page_number,
+                "http_status": None,
+                "raw_cards": 0,
+                "parsed_cards": 0,
+                "unique_cards": 0,
+                "errors": [],
+                "warnings": [],
+            }
+        )
+    return request_rows, diagnostics_rows
 
 
 def _first_text(payload: dict[str, Any], keys: list[str]) -> str:
@@ -382,6 +548,224 @@ def load_failure_events(path: str | Path | None) -> list[ProcurementFailureEvent
             rows = data.get("failure_events", data) if isinstance(data, dict) else data
             return [classify_failure_event(row) for row in rows if isinstance(row, dict)]
     return []
+
+
+def _default_failure_collector(request: Any, config: RadarConfig, limit: int | None, max_pages: int | None) -> list[RadarCard]:
+    import asyncio
+
+    from radar.discovery import _collect_with_existing_collector
+
+    return asyncio.run(_collect_with_existing_collector(request, config, limit, max_pages))
+
+
+def _card_to_failure_analog(source: RadarCard, card: RadarCard) -> HistoricalAnalog:
+    return HistoricalAnalog(
+        source_procurement_number=source.procurement_number,
+        analog_procurement_number=card.procurement_number,
+        title=card.title,
+        customer=card.customer,
+        law=card.law,
+        procedure_type=card.procedure_type,
+        region=card.region,
+        nmck=card.nmck,
+        published_at=card.published_at,
+        completed_at=card.updated_at or card.published_at,
+        source_url=card.source_url,
+        result_data_status="PARTIAL",
+        failed_procurement=card.status_normalized in {"CANCELLED"},
+        failure_reason=card.status_raw,
+        evidence=[{"type": "failure_discovery_search_card", "source_url": card.source_url, "query": card.search_queries[:1]}],
+    )
+
+
+def _failure_row_from_resolution(card: RadarCard, analog: HistoricalAnalog, resolution: dict[str, Any]) -> dict[str, Any]:
+    assembled = resolution.get("assembled_result") or {}
+    diagnostic = resolution.get("resolution_diagnostic") or {}
+    evidence_bits = [
+        analog.failure_reason,
+        card.status_raw,
+        card.status_normalized,
+        analog.result_data_status,
+        json.dumps(assembled, ensure_ascii=False),
+    ]
+    return {
+        "procurement_number": analog.analog_procurement_number,
+        "law": analog.law or card.law,
+        "customer": analog.customer or card.customer,
+        "title": analog.title or card.title,
+        "nmck": analog.nmck,
+        "procedure_type": analog.procedure_type or card.procedure_type,
+        "region": analog.region or card.region,
+        "status_raw": card.status_raw,
+        "status_normalized": card.status_normalized or analog.result_data_status,
+        "failure_status_raw": card.status_raw,
+        "failure_status_normalized": card.status_normalized,
+        "failure_reason": " ".join(str(item) for item in evidence_bits if item),
+        "application_count": analog.participant_count,
+        "admitted_application_count": analog.admitted_participant_count,
+        "winner_name": analog.winner_name,
+        "contract_concluded": bool(analog.contract_price),
+        "contract_not_concluded": False,
+        "protocol_url": analog.protocol_url,
+        "result_url": analog.result_url,
+        "evidence_source": analog.protocol_url or analog.result_url or analog.source_url,
+        "evidence_excerpt": " ".join(str(item) for item in evidence_bits if item)[:500],
+        "completed_at": analog.completed_at or card.updated_at or card.published_at,
+        "resolution_status": diagnostic.get("resolution_status", ""),
+        "result_data_status": analog.result_data_status,
+    }
+
+
+def discover_failure_history(
+    card: RadarCard,
+    config: RadarConfig,
+    *,
+    as_of: datetime | None = None,
+    collector: Any | None = None,
+    result_fetch: Any | None = None,
+    cache_dir: str | Path | None = None,
+    resume: bool = False,
+) -> FailureDiscoveryResult:
+    collector = collector or _default_failure_collector
+    query_plan = build_failure_query_plan(card, config)
+    request_rows, diagnostics_rows = build_failure_request_diagnostics(card, config, as_of=as_of)
+    result = FailureDiscoveryResult(query_plan=query_plan, diagnostics=[FailureDiscoveryDiagnostic(**row) for row in diagnostics_rows])
+    import collect_results
+
+    raw_cards: list[RadarCard] = []
+    diagnostics_by_query = {item.query: item for item in result.diagnostics}
+    max_candidates = config.opportunities.failure_history.maximum_candidates
+    pages_per_query = config.opportunities.failure_history.maximum_pages_per_query
+    for item in query_plan[: config.opportunities.failure_history.maximum_queries_per_procurement]:
+        if len(raw_cards) >= max_candidates:
+            break
+        request = build_eis_search_request(
+            item["query_text"],
+            config,
+            source_profile="r3b1-failure-discovery",
+            as_of=as_of,
+            published_within_days=config.opportunities.failure_history.lookback_days,
+            discovery_mode=item["mode"],
+        )
+        diagnostic = diagnostics_by_query.get(request.query_text)
+        url = serialize_eis_search_request(request, collect_results.DEFAULT_URL)
+        if diagnostic:
+            diagnostic.url = redact_url(url)
+            diagnostic.request_params.update({"publishDateFrom": request.published_from, "publishDateTo": request.published_to})
+        try:
+            remaining = max(0, max_candidates - len(raw_cards))
+            cards = collector(request, config, remaining, pages_per_query)
+            if diagnostic:
+                diagnostic.http_status = 200
+                diagnostic.raw_cards = len(cards)
+                diagnostic.parsed_cards = len(cards)
+                diagnostic.unique_cards = len({candidate.procurement_number or candidate.compute_fingerprint() for candidate in cards})
+                if not cards:
+                    diagnostic.warnings.append("ZERO_RESULTS")
+            raw_cards.extend(cards)
+        except Exception as error:
+            if diagnostic:
+                diagnostic.errors.append(str(error))
+
+    unique_cards = [item for item in deduplicate_cards(raw_cards) if item.procurement_number != card.procurement_number]
+    unique_cards = unique_cards[:max_candidates]
+    result.raw_candidates = [item.to_dict() for item in raw_cards[:max_candidates]]
+    result.parsed_candidates = [item.to_dict() for item in raw_cards[:max_candidates]]
+    result.unique_candidates = [item.to_dict() for item in unique_cards]
+
+    analogs = [_card_to_failure_analog(card, item) for item in unique_cards]
+    resolution_limit = min(config.opportunities.failure_history.maximum_result_resolutions, len(analogs))
+    byte_budget = {"total": 0}
+    cache_path = Path(cache_dir) if cache_dir else None
+    for candidate_card, analog in zip(unique_cards[:resolution_limit], analogs[:resolution_limit], strict=False):
+        resolved, row = collect_result_for_analog(
+            analog,
+            fetch=result_fetch,
+            cache_dir=cache_path,
+            resume=resume,
+            byte_budget=byte_budget,
+        )
+        failure_row = _failure_row_from_resolution(candidate_card, resolved, row)
+        event = classify_failure_event(failure_row)
+        if event.failure_type == "UNKNOWN_FAILURE" and candidate_card.status_normalized == "CANCELLED":
+            failure_row["failure_reason"] = f"{failure_row['failure_reason']} Procedure was cancelled."
+            event = classify_failure_event(failure_row)
+        if event.failure_type == "UNKNOWN_FAILURE":
+            failure_row["classification"] = event.to_dict()
+            failure_row["resolution"] = row
+            result.result_resolution_failures.append(failure_row)
+        else:
+            result.failure_events.append(event)
+            result.usable_results.append({"failure_event": event.to_dict(), "resolution": row})
+
+    result.diagnostics_summary = {
+        "mode": "FAILED_ONLY",
+        "queries_attempted": len(query_plan),
+        "pages_requested": len(query_plan) * config.opportunities.failure_history.maximum_pages_per_query,
+        "raw_cards": len(raw_cards),
+        "parsed_cards": len(raw_cards),
+        "unique_cards": len(unique_cards),
+        "result_resolution_attempts": resolution_limit,
+        "result_resolution_failures": len(result.result_resolution_failures),
+        "failure_events_found": len(result.failure_events),
+        "usable_results": len(result.usable_results),
+        "bytes_downloaded": byte_budget["total"],
+        "zero_result_queries": sum(1 for item in result.diagnostics if "ZERO_RESULTS" in item.warnings),
+        "query_errors": sum(1 for item in result.diagnostics if item.errors),
+    }
+    result.diagnostics_summary["request_rows"] = request_rows
+    return result
+
+
+def assess_failure_history(
+    card: RadarCard,
+    assessment: RadarAssessment,
+    config: RadarConfig,
+    *,
+    as_of: datetime | None = None,
+    offline_failure_input: str | Path | None = None,
+    previous_opportunities: dict[str, NoCompetitionOpportunity] | None = None,
+    collector: Any | None = None,
+    result_fetch: Any | None = None,
+    cache_dir: str | Path | None = None,
+    resume: bool = False,
+) -> FailureDiscoveryResult:
+    if offline_failure_input:
+        failure_events = load_failure_events(offline_failure_input)
+    else:
+        failure_events = []
+    discovery = discover_failure_history(card, config, as_of=as_of, collector=collector, result_fetch=result_fetch, cache_dir=cache_dir, resume=resume)
+    if failure_events:
+        discovery.failure_events = failure_events[: config.opportunities.failure_history.maximum_candidates]
+    discovery.republication_links = [
+        score_republication_relation(card, failure, config)
+        for failure in discovery.failure_events[: config.opportunities.failure_history.maximum_result_resolutions]
+        if failure.failure_type != "UNKNOWN_FAILURE"
+    ]
+    discovery.opportunities = []
+    for failure, link in zip(discovery.failure_events, discovery.republication_links, strict=False):
+        if link.relation_type == "NOT_RELATED":
+            continue
+        opportunity = build_opportunity(card, assessment, failure, link, config)
+        if opportunity.opportunity_score >= config.opportunities.scoring.minimum_opportunity_score:
+            discovery.opportunities.append(opportunity)
+    if previous_opportunities:
+        for opportunity in discovery.opportunities:
+            previous = previous_opportunities.get(opportunity.current_procurement_number)
+            discovery.diagnostics_summary.setdefault("transitions", []).extend(
+                detect_opportunity_transitions(previous, opportunity)
+            )
+    if failure_events:
+        discovery.usable_results = [item.to_dict() for item in discovery.failure_events if item.failure_type != "UNKNOWN_FAILURE"]
+        discovery.result_resolution_failures = [item.to_dict() for item in discovery.failure_events if item.failure_type == "UNKNOWN_FAILURE"]
+    discovery.diagnostics_summary.update(
+        {
+            "failure_events_found": len(discovery.failure_events),
+            "republication_links_found": len(discovery.republication_links),
+            "opportunities_produced": len(discovery.opportunities),
+        }
+    )
+    return discovery
 
 
 def assess_failed_opportunities(
