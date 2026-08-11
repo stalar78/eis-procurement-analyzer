@@ -2,9 +2,9 @@
 
 ## Purpose
 
-EIS Procurement Radar is the stateful decision-support layer of EIS Procurement Analyzer. It turns live EIS search results into a bounded, explainable pipeline for identifying procurements worth manual review and tracking meaningful changes across recurring runs.
+EIS Procurement Radar is the stateful decision-support layer of EIS Procurement Analyzer. It turns live EIS search results into a bounded, explainable pipeline for identifying procurements worth manual review, tracking meaningful changes across recurring runs, and surfacing a compact notification-ready alert feed.
 
-Current Radar version: `0.4.1-r4b-orchestration`.
+Current Radar version: `0.4.2-r4c-alert-filtering`.
 
 The Radar is intentionally conservative. It does not submit applications or replace legal/commercial review.
 
@@ -22,6 +22,7 @@ recurring orchestration / lock
     -> history-adjusted assessment
     -> failed-procurement / republication opportunity intelligence
     -> recurring-state comparison / change feed
+    -> alert filtering / deduplication / priority
     -> controlled document enrichment
     -> deep assessment
     -> transactional publication
@@ -64,16 +65,27 @@ Repeated identical runs are idempotent and should emit no change-feed noise.
 
 R4B adds the operational shell needed for unattended external scheduling.
 
-`radar.orchestration` provides:
-
-- atomic `radar.lock` acquisition for recurring runs;
-- stale-lock recovery after a configurable timeout;
-- distinct success, locked/skipped, and failure exit codes;
-- bounded retention for archived successful and failed runtime directories.
-
-`radar.state` stores append-only recurring lifecycle records with statuses `STARTED`, `SUCCESS`, `FAILED`, and `SKIPPED_LOCKED`.
+`radar.orchestration` provides atomic `radar.lock` acquisition, stale-lock recovery, distinct exit codes, and bounded retention. `radar.state` stores append-only lifecycle statuses `STARTED`, `SUCCESS`, `FAILED`, and `SKIPPED_LOCKED`.
 
 A failed recurring run does not replace the last successful published result, and lock release is handled through the failure path so a later run can continue normally.
+
+### Alert filtering
+
+R4C adds `radar.alerts`, a deterministic layer between the raw change feed and any future delivery channel.
+
+It can promote:
+
+- `NEW_OPPORTUNITY`;
+- interesting new procurements already rated `PRIORITY`/`REVIEW` or above a configured score threshold;
+- decision transitions into `PRIORITY`;
+- significant opportunity score/level improvements;
+- significant NMCK changes;
+- deadlines crossing into the urgent window;
+- closure or deactivation of previously interesting items.
+
+Low-value changes can be suppressed. Multiple qualifying raw changes for the same procurement are deduplicated into one alert while preserving source events, values, and explanation. Alerts receive `HIGH`, `MEDIUM`, or `LOW` priority.
+
+SQLite `alert_history` stores alert fingerprints so an identical alert is not emitted again on a repeated run.
 
 ### Enrichment
 
@@ -81,13 +93,15 @@ A failed recurring run does not replace the last successful published result, an
 
 ### State and resilience
 
-`radar.state` stores procurement, assessment, opportunity, transition, change-feed, and recurring-run lifecycle data in SQLite.
+`radar.state` stores procurement, assessment, opportunity, transition, change-feed, recurring-run lifecycle, and alert-history data in SQLite.
 
 `radar.source_resolution` provides bounded recovery when EIS URLs are stale or intermittently unavailable.
 
 ### Reporting
 
 `radar.reporting` writes structured reports and supports transactional publication. The latest attempted run and last publishable successful result remain separable.
+
+R4C adds `alert_feed` to runtime JSON/CSV outputs and to XLSX/Markdown reporting surfaces.
 
 ## Configuration
 
@@ -96,7 +110,7 @@ Primary examples:
 - `config/radar.example.yaml`
 - `config/search_profiles.yaml`
 
-R4B adds a `recurring` configuration block for stale-lock timeout and successful/failed runtime retention counts.
+R4B adds a `recurring` configuration block for stale-lock timeout and runtime retention. R4C adds an `alerts` block with thresholds for interesting new procurements, high-priority score, opportunity-score increase, NMCK percentage change, and urgent deadlines.
 
 ## Core CLI
 
@@ -104,19 +118,18 @@ R4B adds a `recurring` configuration block for stale-lock timeout and successful
 .\.venv\Scripts\python.exe -m radar.runner --help
 ```
 
-Recurring mode is enabled with `--recurring`. CLI overrides are available for stale-lock timeout and retention limits.
-
-The Radar does not contain an internal cron loop; an external scheduler should invoke the recurring command at the desired interval.
+Recurring mode is enabled with `--recurring`. The Radar does not contain an internal cron loop; an external scheduler should invoke the recurring command at the desired interval.
 
 ## Decision philosophy
 
-The Radar separates evidence layers deliberately:
+The Radar separates evidence and operational layers deliberately:
 
 - a technically attractive procurement can still have poor historical economics;
 - missing historical data is not a rejection signal;
 - historical failure is not automatically a positive signal;
 - a current procurement must still be open and technically eligible;
 - recurring monitoring should surface meaningful changes rather than repeat unchanged cards;
+- notification filtering should surface high-value changes rather than forward the complete raw feed;
 - a failed unattended run must not destroy the last useful published result;
 - overlapping recurring runs should be skipped rather than executed concurrently;
 - partial protocol evidence contributes only to the metric it supports;
@@ -128,7 +141,9 @@ R3B.1 validated the live failed-history path against real EIS data.
 
 R4A was accepted with `151 passed` and demonstrated idempotent two-run state comparison.
 
-R4B was accepted with `156 passed`. Deterministic orchestration tests cover locking, stale-lock recovery, failure recovery, lifecycle persistence, and retention. A two-run validation on one SQLite database produced `STARTED -> SUCCESS` twice, while the second identical run reported `new=0`, `changed=0`, and no change-feed events.
+R4B was accepted with `156 passed`; deterministic tests cover locking, stale-lock recovery, failure recovery, lifecycle persistence, and retention.
+
+R4C was accepted with `161 passed`. Deterministic tests cover promotion of important events, suppression of low-value noise, transition into `PRIORITY`, urgent deadlines, per-procurement deduplication, and repeated-run alert idempotency.
 
 ## Safety and repository hygiene
 
@@ -145,3 +160,4 @@ See also:
 - [Opportunity intelligence](RADAR_OPPORTUNITIES.md)
 - [Recurring change feed](RADAR_CHANGE_FEED.md)
 - [Recurring orchestration](RADAR_ORCHESTRATION.md)
+- [Alert filtering](RADAR_ALERTS.md)
