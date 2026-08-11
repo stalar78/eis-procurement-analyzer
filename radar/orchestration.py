@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import ctypes
 import json
 import os
 import shutil
@@ -44,6 +45,27 @@ def _read_lock_metadata(path: Path) -> dict[str, Any]:
         return {}
 
 
+def _windows_pid_status(pid: int) -> bool | None:
+    if os.name != "nt" or pid <= 0:
+        return None
+    PROCESS_QUERY_LIMITED_INFORMATION = 0x1000
+    SYNCHRONIZE = 0x00100000
+    access = PROCESS_QUERY_LIMITED_INFORMATION | SYNCHRONIZE
+    try:
+        handle = ctypes.windll.kernel32.OpenProcess(access, False, pid)
+    except AttributeError:
+        return None
+    if not handle:
+        return False if ctypes.GetLastError() in {87, 1168} else None
+    try:
+        exit_code = ctypes.c_ulong()
+        if not ctypes.windll.kernel32.GetExitCodeProcess(handle, ctypes.byref(exit_code)):
+            return None
+        return exit_code.value == 259
+    finally:
+        ctypes.windll.kernel32.CloseHandle(handle)
+
+
 def acquire_run_lock(
     output_dir: str | Path,
     run_id: str,
@@ -67,6 +89,19 @@ def acquire_run_lock(
             return RunLock(path=path, run_id=run_id, acquired_at=acquired_at, stale_recovered=stale_recovered)
         except FileExistsError:
             existing = _read_lock_metadata(path)
+            existing_pid_raw = existing.get("pid")
+            try:
+                existing_pid = int(existing_pid_raw)
+            except (TypeError, ValueError):
+                existing_pid = None
+            if existing_pid is not None:
+                pid_status = _windows_pid_status(existing_pid)
+                if pid_status is True:
+                    raise RunLockedError(path, existing)
+                if pid_status is False:
+                    path.unlink(missing_ok=True)
+                    stale_recovered = True
+                    continue
             acquired_raw = existing.get("acquired_at")
             try:
                 existing_at = datetime.fromisoformat(acquired_raw) if acquired_raw else datetime.fromtimestamp(path.stat().st_mtime, tz=acquired_at.tzinfo)

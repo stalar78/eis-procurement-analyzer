@@ -1,8 +1,10 @@
 import json
+import os
 import sqlite3
 from datetime import datetime, timedelta
 from pathlib import Path
 
+import radar.orchestration as orchestration
 from radar.orchestration import FAILURE_EXIT_CODE, LOCKED_EXIT_CODE, SUCCESS_EXIT_CODE, retain_runtime_runs
 from radar.runner import run
 
@@ -51,12 +53,12 @@ def test_overlapping_recurring_run_is_skipped_by_lock(tmp_path: Path) -> None:
     lock = out / "radar.lock"
     lock.write_text(
         json.dumps(
-            {
-                "run_id": "active",
-                "pid": 123,
-                "acquired_at": datetime.now().astimezone().isoformat(timespec="seconds"),
-            }
-        ),
+                {
+                    "run_id": "active",
+                    "pid": os.getpid(),
+                    "acquired_at": datetime.now().astimezone().isoformat(timespec="seconds"),
+                }
+            ),
         encoding="utf-8",
     )
     code = run(_recurring_args(tmp_path))
@@ -65,6 +67,75 @@ def test_overlapping_recurring_run_is_skipped_by_lock(tmp_path: Path) -> None:
     rows = _lifecycle_rows(tmp_path / "radar.db")
     assert rows[-1]["status"] == "SKIPPED_LOCKED"
     assert rows[-1]["failure_reason"] == "active recurring run lock"
+
+
+def test_live_pid_keeps_fresh_lock_active(tmp_path: Path, monkeypatch) -> None:
+    out = tmp_path / "out"
+    out.mkdir()
+    lock = out / "radar.lock"
+    lock.write_text(
+        json.dumps(
+            {
+                "run_id": "active",
+                "pid": 456,
+                "acquired_at": datetime.now().astimezone().isoformat(timespec="seconds"),
+            }
+        ),
+        encoding="utf-8",
+    )
+    monkeypatch.setattr(orchestration, "os", orchestration.os)
+    monkeypatch.setattr(orchestration.os, "name", "nt")
+    monkeypatch.setattr(orchestration, "_windows_pid_status", lambda pid: True)
+
+    code = run(_recurring_args(tmp_path))
+
+    assert code == LOCKED_EXIT_CODE
+    assert lock.exists()
+
+
+def test_dead_pid_recovers_fresh_lock_immediately(tmp_path: Path, monkeypatch) -> None:
+    out = tmp_path / "out"
+    out.mkdir()
+    lock = out / "radar.lock"
+    lock.write_text(
+        json.dumps(
+            {
+                "run_id": "orphan",
+                "pid": 456,
+                "acquired_at": datetime.now().astimezone().isoformat(timespec="seconds"),
+            }
+        ),
+        encoding="utf-8",
+    )
+    monkeypatch.setattr(orchestration, "os", orchestration.os)
+    monkeypatch.setattr(orchestration.os, "name", "nt")
+    monkeypatch.setattr(orchestration, "_windows_pid_status", lambda pid: False)
+
+    code = run(_recurring_args(tmp_path))
+
+    assert code == SUCCESS_EXIT_CODE
+    assert not lock.exists()
+
+
+def test_malformed_pid_falls_back_to_age_based_recovery_only(tmp_path: Path, monkeypatch) -> None:
+    out = tmp_path / "out"
+    out.mkdir()
+    lock = out / "radar.lock"
+    fresh = datetime.now().astimezone()
+    lock.write_text(
+        json.dumps({"run_id": "broken", "pid": "not-a-number", "acquired_at": fresh.isoformat(timespec="seconds")}),
+        encoding="utf-8",
+    )
+    monkeypatch.setattr(orchestration, "os", orchestration.os)
+    monkeypatch.setattr(orchestration.os, "name", "nt")
+    called: list[int] = []
+    monkeypatch.setattr(orchestration, "_windows_pid_status", lambda pid: called.append(pid) or None)
+
+    code = run(_recurring_args(tmp_path))
+
+    assert code == LOCKED_EXIT_CODE
+    assert lock.exists()
+    assert called == []
 
 
 def test_stale_lock_is_recovered_and_run_succeeds(tmp_path: Path) -> None:
@@ -82,6 +153,30 @@ def test_stale_lock_is_recovered_and_run_succeeds(tmp_path: Path) -> None:
     assert rows[-1]["status"] == "SUCCESS"
     diagnostics = json.loads(rows[-1]["diagnostics_json"])
     assert diagnostics["stale_lock_recovered"] is True
+
+
+def test_dead_pid_orphan_lock_is_released_after_successful_run(tmp_path: Path, monkeypatch) -> None:
+    out = tmp_path / "out"
+    out.mkdir()
+    lock = out / "radar.lock"
+    lock.write_text(
+        json.dumps(
+            {
+                "run_id": "orphan",
+                "pid": 456,
+                "acquired_at": datetime.now().astimezone().isoformat(timespec="seconds"),
+            }
+        ),
+        encoding="utf-8",
+    )
+    monkeypatch.setattr(orchestration, "os", orchestration.os)
+    monkeypatch.setattr(orchestration.os, "name", "nt")
+    monkeypatch.setattr(orchestration, "_windows_pid_status", lambda pid: False)
+
+    code = run(_recurring_args(tmp_path))
+
+    assert code == SUCCESS_EXIT_CODE
+    assert not lock.exists()
 
 
 def test_failed_recurring_run_preserves_last_success_and_next_run_recovers(tmp_path: Path) -> None:
