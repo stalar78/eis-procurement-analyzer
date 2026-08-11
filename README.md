@@ -2,66 +2,84 @@
 
 EIS Procurement Analyzer is a rule-based Python pipeline for collecting, downloading, classifying, and analyzing public procurement materials from the Russian EIS system.
 
-The repository includes **EIS Procurement Radar**: a stateful decision-support layer that discovers active procurements, verifies open status, evaluates technical fit, searches historical analogs, extracts competition evidence, detects failed-procurement/republication opportunities, tracks changes across recurring runs, filters those changes into a compact alert feed, optionally delivers alerts to Telegram, and now exposes a stable production-style recurring entry point with preflight validation.
+The repository includes **EIS Procurement Radar**: a stateful decision-support layer that discovers active procurements, verifies open status, evaluates technical fit, searches historical analogs, extracts competition evidence, detects failed-procurement/republication opportunities, tracks changes across recurring runs, filters those changes into a compact alert feed, optionally delivers alerts to Telegram, and exposes a stable Windows production launcher with preflight validation.
 
 The project is **not** a legal, financial, automated participation, or automated bidding service.
 
 ## Current status
 
-- Radar version: `0.4.4-r4e-production-profile`
+- Radar version: `0.4.5-r4f-windows-deployment`
 - Historical result extraction version: `0.3.4-r3a-result-extraction`
 - Opportunity intelligence version: `0.3.5-r3b-opportunities`
-- Full local test suite at the R4E milestone: `176 passed`
+- Full local test suite at the R4F milestone: `181 passed`
 - R4A adds an idempotent recurring-run change feed.
 - R4B adds reliable recurring execution with locking, lifecycle persistence, failure isolation, and retention.
 - R4C adds deterministic alert filtering, prioritization, deduplication, and alert-history idempotency.
 - R4D adds optional Telegram delivery with persisted alert/chunk status and retry-safe partial delivery.
 - R4E adds a production profile, stable path resolution, fail-fast preflight checks, and a scheduler-friendly entry point.
+- R4F adds a Windows launcher contract for Task Scheduler, timestamped runtime logs, exact exit-code propagation, and narrow runtime-artifact ignores.
 
-The system is intentionally conservative: missing evidence remains missing, partial result data contributes only to supported metrics, low-confidence signals remain explicit, and delivery/operational layers do not make business decisions.
+## Production entry points
 
-## Radar pipeline
+Direct Python preflight:
 
-```text
-production/preflight entry point
-    -> recurring run orchestration / lock
-    -> EIS active search
-    -> discovery and deduplication
-    -> preliminary eligibility/scoring
-    -> detail-page open verification
-    -> historical analog search
-    -> result/protocol extraction
-    -> competition metrics + confidence
-    -> history-adjusted assessment
-    -> failed-procurement / republication opportunity intelligence
-    -> recurring-state comparison / change feed
-    -> alert filtering / deduplication / priority
-    -> optional Telegram delivery
-    -> controlled document enrichment
-    -> deep technical assessment
-    -> transactional publication
-    -> lifecycle record + retention
+```powershell
+.\.venv\Scripts\python.exe -m radar.runner --production --preflight-only --verbose
 ```
 
-## What the project demonstrates
+Direct Python production run:
 
-- Playwright-based EIS discovery and page traversal;
-- active-procedure search with explicit stage/deadline verification;
-- SQLite-backed run, historical, opportunity, change, lifecycle, alert, and delivery state;
-- idempotent recurring change detection and alert generation;
-- deterministic notification-ready filtering;
-- optional Telegram Bot API delivery over HTTPS;
-- persisted alert-level and chunk-level delivery state;
-- retryable partial delivery without resending successful chunks;
-- recurring-run locking with stale-lock recovery;
-- failure isolation and bounded runtime retention;
-- production-style `--production` mode;
-- scheduler-safe `--preflight-only` validation;
-- stable production config/path resolution independent of process working directory;
-- project-relative runtime DB/output paths without machine-specific absolute paths;
-- environment-based Telegram credentials with delivery disabled by default;
-- transactional reporting with `latest` vs `latest_attempt` semantics;
-- synthetic regression fixtures and automated tests.
+```powershell
+.\.venv\Scripts\python.exe -m radar.runner --production
+```
+
+Windows launcher:
+
+```powershell
+scripts\radar-production.cmd --preflight-only
+scripts\radar-production.cmd
+```
+
+The launcher resolves the project root from its own location, explicitly uses `.venv\Scripts\python.exe`, writes stdout/stderr to `runtime-logs\radar-YYYYMMDD-HHMMSS.log`, and returns the exact Radar exit code.
+
+## Windows Task Scheduler contract
+
+The scheduled task should use the **absolute local path** to `scripts\radar-production.cmd` as `Program/script`. That absolute path is deployment-specific and is intentionally not committed to the repository.
+
+Recommended shape:
+
+```text
+Program/script: <absolute local path>\scripts\radar-production.cmd
+Arguments:      (empty for a normal production run)
+Start in:       optional
+```
+
+For deployment validation, use:
+
+```text
+Arguments: --preflight-only
+```
+
+The launcher does not depend on the Task Scheduler working directory.
+
+## Configuration and secrets
+
+Production defaults live in `config/radar.production.yaml`. Runtime DB/output paths are resolved against the project root rather than the caller's current working directory.
+
+Telegram credentials remain environment-based:
+
+```text
+RADAR_TELEGRAM_BOT_TOKEN
+RADAR_TELEGRAM_CHAT_ID
+```
+
+Do not place real secrets in tracked config, Task Scheduler command-line arguments, or repository files.
+
+## Runtime data and repository safety
+
+Generated/live data must remain local. The repository excludes runtime outputs, SQLite databases, downloaded procurement documents, browser state, live EIS HTML/protocol artifacts, caches, locks, credentials, `runtime-logs/`, and the root-level runtime validation artifact `RADAR_R3A1_LIVE_VALIDATION.md`.
+
+Tracked fixtures are synthetic/test-oriented and should not be replaced with real procurement corpora.
 
 ## Documentation
 
@@ -81,49 +99,9 @@ production/preflight entry point
 - [R4C alert filtering](docs/RADAR_ALERTS.md)
 - [R4D Telegram delivery](docs/RADAR_TELEGRAM.md)
 - [R4E production profile](docs/RADAR_PRODUCTION.md)
+- [R4F Windows deployment](docs/RADAR_WINDOWS_DEPLOYMENT.md)
 - [Synthetic examples](examples/README.md)
 - [Security policy](SECURITY.md)
-
-## Main entry point
-
-```powershell
-.\.venv\Scripts\python.exe -m radar.runner --help
-```
-
-### Production preflight
-
-```powershell
-.\.venv\Scripts\python.exe -m radar.runner --production --preflight-only --verbose
-```
-
-Production mode loads `config/radar.production.yaml`, normalizes relative runtime paths against the project root, validates the runtime environment, and returns exit code `78` on preflight failure without starting the Radar pipeline.
-
-### Production recurring run
-
-```powershell
-.\.venv\Scripts\python.exe -m radar.runner --production
-```
-
-`--production` automatically routes through the existing recurring orchestration and lock behavior. It is intended to be called by an external scheduler; the application does not contain an internal cron loop.
-
-## Configuration and secrets
-
-Production defaults live in:
-
-```text
-config/radar.production.yaml
-```
-
-The tracked production profile uses project-relative runtime paths such as `outputs/radar` and `data/radar.db`. Production path resolution does not depend on the caller's current working directory.
-
-Telegram delivery remains disabled by default. Preferred credential sources are environment variables:
-
-```text
-RADAR_TELEGRAM_BOT_TOKEN
-RADAR_TELEGRAM_CHAT_ID
-```
-
-Do not commit real tokens, chat IDs, local databases, generated outputs, or downloaded procurement data.
 
 ## Safe validation
 
@@ -131,13 +109,7 @@ Do not commit real tokens, chat IDs, local databases, generated outputs, or down
 .\.venv\Scripts\python.exe -m pytest -q
 ```
 
-R4E validation covers successful production preflight, missing Telegram environment values when Telegram is enabled, invalid/unwritable runtime paths, invalid operational values, recurring-mode routing, secret-safe errors, fail-fast preflight, and execution from an unrelated current working directory.
-
-## Repository safety
-
-Generated/live data must remain local. The repository intentionally excludes runtime outputs, SQLite databases, downloaded procurement documents, browser state, live EIS HTML/protocol artifacts, caches, locks, and credentials.
-
-Tracked fixtures are synthetic/test-oriented and should not be replaced with real procurement corpora.
+R4F validation covers project-root-independent launcher execution, absolute Task Scheduler launcher-path generation, exact preflight exit-code propagation, logging behavior, no duplicated `--production` argument in preflight mode, and the narrow ignore rule for the runtime validation artifact.
 
 ## Known limitations
 
@@ -146,14 +118,14 @@ Tracked fixtures are synthetic/test-oriented and should not be replaced with rea
 - Historical confidence may remain low with small usable samples.
 - Some EIS layouts may still require parser maintenance.
 - Live republication matching has not yet been demonstrated with a real bounded pair.
-- Windows Task Scheduler registration is not yet automated by the project.
+- The repository provides deployment support but does not automatically register a Windows Task Scheduler task.
 - Telegram support is outbound-only: no bot commands, polling, or inbound workflow is implemented.
 - The project does not bypass CAPTCHA, authentication boundaries, or closed access.
 - Final participation decisions require human legal, commercial, and technical review.
 
 ## Development direction
 
-R4A-R4E provide the operational chain from recurring procurement monitoring through alert delivery and a stable production entry point. The next step is deployment handoff: define the concrete Windows Task Scheduler task, environment setup, schedule, working parameters, and controlled first scheduled run without adding new business logic.
+R4A-R4F now provide the operational chain from recurring procurement monitoring through alert delivery and a Windows scheduler-safe production launcher. The next step is machine deployment: configure local environment variables, run production preflight through the launcher, create the Task Scheduler entry, and perform a controlled first scheduled run.
 
 ## License
 
