@@ -258,22 +258,39 @@ def discover_cards(
         unique = [card for card in unique if is_provisionally_open(card, now)[0]]
     provisional_count = len(unique)
     verifications: list[dict[str, Any]] = []
+    rejected_by_detail_verification = 0
+    verification_skipped_due_to_limit = 0
     if config.discovery.verify_open_status_from_detail_page and unique:
+        attempted_cards = unique[: config.discovery.verify_top_candidates_limit]
+        verification_skipped_due_to_limit = max(0, len(unique) - len(attempted_cards))
         verifications = verify_cards_from_detail(unique, now, config.discovery.verify_top_candidates_limit)
-        verified_open_numbers = {
-            row["procurement_number"]
+        verification_by_number = {
+            row["procurement_number"]: row
             for row in verifications
-            if row.get("open_verification_status") == "VERIFIED_OPEN"
+            if row.get("procurement_number")
         }
-        unique = [card for card in unique if card.procurement_number in verified_open_numbers]
+        kept_cards: list[RadarCard] = []
+        for card in unique:
+            verification = verification_by_number.get(card.procurement_number)
+            if verification is None:
+                kept_cards.append(card)
+                continue
+            status = verification.get("open_verification_status")
+            if status in {"VERIFIED_CLOSED", "VERIFIED_CANCELLED", "STATUS_CONFLICT", "DEADLINE_CONFLICT"}:
+                rejected_by_detail_verification += 1
+                continue
+            kept_cards.append(card)
+        unique = kept_cards
     diagnostics["open_verifications"] = verifications
     diagnostics["detail_verifications_attempted"] = len(verifications)
+    diagnostics["detail_verification_skipped_due_to_limit"] = verification_skipped_due_to_limit
     diagnostics["verified_open"] = sum(1 for row in verifications if row.get("open_verification_status") == "VERIFIED_OPEN")
     diagnostics["verified_closed"] = sum(1 for row in verifications if row.get("open_verification_status") == "VERIFIED_CLOSED")
     diagnostics["verified_cancelled"] = sum(1 for row in verifications if row.get("open_verification_status") == "VERIFIED_CANCELLED")
     diagnostics["status_conflicts"] = sum(1 for row in verifications if row.get("open_verification_status") == "STATUS_CONFLICT")
     diagnostics["deadline_conflicts"] = sum(1 for row in verifications if row.get("open_verification_status") == "DEADLINE_CONFLICT")
     diagnostics["detail_unavailable"] = sum(1 for row in verifications if row.get("open_verification_status") == "DETAIL_UNAVAILABLE")
+    diagnostics["detail_verification_rejected"] = rejected_by_detail_verification
     diagnostics["status_audit"] = build_status_audit(deduplicate_cards(collected), now)
     diagnostics["raw_cards"] = len(collected)
     diagnostics["unique_cards"] = len(unique)
@@ -289,5 +306,8 @@ def discover_cards(
         )
     )
     if not unique:
-        diagnostics["no_open_candidate_reason"] = "NO_OPEN_CANDIDATES_FOUND"
+        if provisional_count and rejected_by_detail_verification:
+            diagnostics["no_open_candidate_reason"] = "ALL_PROVISIONAL_CANDIDATES_REJECTED_BY_DETAIL_VERIFICATION"
+        else:
+            diagnostics["no_open_candidate_reason"] = "NO_OPEN_CANDIDATES_FOUND"
     return unique[:limit] if limit else unique, diagnostics
