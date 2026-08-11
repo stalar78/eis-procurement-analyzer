@@ -605,6 +605,22 @@ class OpportunityTransition:
 
 
 @dataclass
+class ChangeFeedEvent:
+    procurement_number: str
+    event_type: str
+    detected_at: str
+    field_name: str = ""
+    previous_value: str = ""
+    current_value: str = ""
+    severity: str = "INFO"
+    source: str = "procurement_state"
+    explanation: str = ""
+
+    def to_dict(self) -> dict[str, Any]:
+        return asdict(self)
+
+
+@dataclass
 class NoCompetitionOpportunity:
     current_procurement_number: str
     previous_procurement_number: str = ""

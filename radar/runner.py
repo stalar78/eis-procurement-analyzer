@@ -414,14 +414,16 @@ def run(argv: list[str] | None = None) -> int:
         if opportunity_result is not None:
             from radar import opportunity_intelligence_version
 
-            state.save_opportunity_assessment(
+            opportunity_change_feed = state.save_opportunity_assessment(
                 algorithm_version=opportunity_intelligence_version,
                 failure_events=opportunity_result.failure_events,
                 republication_links=opportunity_result.republication_links,
                 opportunities=opportunities,
                 transitions=opportunity_result.transitions,
                 detected_at=finished_at.isoformat(timespec="seconds"),
+                active_procurement_numbers=[card.procurement_number for card in cards],
             )
+            diagnostics.setdefault("change_feed", []).extend(opportunity_change_feed)
         if enrichment_result is not None:
             state.save_enrichment_run(
                 enrichment_run_id=f"enrich_{run_id}",

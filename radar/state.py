@@ -5,7 +5,7 @@ import sqlite3
 from pathlib import Path
 from typing import Any
 
-from radar.models import ArtifactRecord, DeepAssessment, EnrichmentStatus, NoCompetitionOpportunity, OpportunityTransition, ProcurementFailureEvent, RadarAssessment, RadarCard, RepeatedProcurementLink
+from radar.models import ArtifactRecord, ChangeFeedEvent, DeepAssessment, EnrichmentStatus, NoCompetitionOpportunity, OpportunityTransition, ProcurementFailureEvent, RadarAssessment, RadarCard, RepeatedProcurementLink
 
 
 TRACKED_FIELDS = {
@@ -17,6 +17,43 @@ TRACKED_FIELDS = {
     "source_url": "source_url",
     "updated_at": "updated_at",
 }
+ASSESSMENT_TRACKED_FIELDS = {
+    "preliminary_score": "total_score",
+    "preliminary_decision": "radar_decision",
+    "history_adjusted_score": "history_adjusted_score",
+    "history_adjusted_decision": "history_adjusted_decision",
+}
+
+
+def _string_value(value: Any) -> str:
+    if hasattr(value, "value"):
+        return str(value.value)
+    if value is None:
+        return ""
+    return str(value)
+
+
+def _event_type_for_field(field_name: str) -> str:
+    mapping = {
+        "deadline": "DEADLINE_CHANGED",
+        "nmck": "NMCK_CHANGED",
+        "status": "STATUS_CHANGED",
+        "preliminary_score": "PRELIMINARY_SCORE_CHANGED",
+        "preliminary_decision": "PRELIMINARY_DECISION_CHANGED",
+        "history_adjusted_score": "HISTORY_SCORE_CHANGED",
+        "history_adjusted_decision": "HISTORY_DECISION_CHANGED",
+        "opportunity_score": "OPPORTUNITY_SCORE_CHANGED",
+        "opportunity_level": "OPPORTUNITY_DECISION_CHANGED",
+    }
+    return mapping.get(field_name, "PROCUREMENT_CHANGED")
+
+
+def _severity_for_event(event_type: str) -> str:
+    if event_type in {"PROCUREMENT_CLOSED", "OPPORTUNITY_NO_LONGER_ACTIVE"}:
+        return "WARNING"
+    if event_type in {"NEW_PROCUREMENT", "NEW_OPPORTUNITY"}:
+        return "INFO"
+    return "NOTICE"
 
 
 class RadarState:
@@ -392,6 +429,70 @@ class RadarState:
                 flags[card.procurement_number] = (False, row["fingerprint"] != card.source_fingerprint)
         return flags
 
+    def _insert_change_event(
+        self,
+        cur: sqlite3.Cursor,
+        *,
+        procurement_number: str,
+        detected_at: str,
+        field_name: str,
+        old_value: Any,
+        new_value: Any,
+        change_type: str,
+    ) -> ChangeFeedEvent:
+        event_type = change_type if change_type.isupper() else _event_type_for_field(field_name)
+        event = ChangeFeedEvent(
+            procurement_number=procurement_number,
+            event_type=event_type,
+            detected_at=detected_at,
+            field_name=field_name,
+            previous_value=_string_value(old_value),
+            current_value=_string_value(new_value),
+            severity=_severity_for_event(event_type),
+            source="procurement_state",
+            explanation=f"{field_name} changed from {_string_value(old_value)!r} to {_string_value(new_value)!r}",
+        )
+        cur.execute(
+            """
+            INSERT INTO changes
+            (procurement_number, detected_at, field_name, old_value, new_value, change_type)
+            VALUES (?, ?, ?, ?, ?, ?)
+            """,
+            (
+                event.procurement_number,
+                event.detected_at,
+                event.field_name,
+                event.previous_value,
+                event.current_value,
+                event.event_type,
+            ),
+        )
+        return event
+
+    def _closed_missing_procurements(self, current_numbers: set[str], finished_at: str) -> list[ChangeFeedEvent]:
+        cur = self.connection.cursor()
+        events: list[ChangeFeedEvent] = []
+        rows = cur.execute("SELECT procurement_number, current_json FROM procurements").fetchall()
+        for row in rows:
+            if row["procurement_number"] in current_numbers:
+                continue
+            payload = json.loads(row["current_json"])
+            previous_status = _string_value(payload.get("status_normalized"))
+            if previous_status.upper() in {"COMPLETED", "CANCELLED", "CONTRACT_SIGNED"}:
+                continue
+            events.append(
+                self._insert_change_event(
+                    cur,
+                    procurement_number=row["procurement_number"],
+                    detected_at=finished_at,
+                    field_name="open_state",
+                    old_value=previous_status or "previously_seen",
+                    new_value="not_observed_in_current_run",
+                    change_type="PROCUREMENT_CLOSED",
+                )
+            )
+        return events
+
     def enrichment_cache_skip_reason(
         self,
         procurement_number: str,
@@ -443,13 +544,27 @@ class RadarState:
             (run_id, started_at, finished_at, as_of, radar_version, json.dumps(diagnostics, ensure_ascii=False)),
         )
         changes_count = 0
+        change_feed: list[ChangeFeedEvent] = []
         assessment_by_number = {item.procurement_number: item for item in assessments}
+        current_numbers = {card.procurement_number for card in cards}
         for card in cards:
             assessment = assessment_by_number.get(card.procurement_number)
             existing = self.get_current(card.procurement_number)
             is_new = existing is None
             old_json = json.loads(existing["current_json"]) if existing else {}
             is_changed = bool(existing and existing["fingerprint"] != card.source_fingerprint)
+            old_assessment = None
+            if existing:
+                old_assessment = self.connection.execute(
+                    """
+                    SELECT assessment_json FROM assessments
+                    WHERE procurement_number = ?
+                    ORDER BY id DESC
+                    LIMIT 1
+                    """,
+                    (card.procurement_number,),
+                ).fetchone()
+            old_assessment_json = json.loads(old_assessment["assessment_json"]) if old_assessment else {}
 
             cur.execute(
                 """
@@ -472,25 +587,51 @@ class RadarState:
                         (run_id, card.procurement_number, profile, query),
                     )
 
+            if is_new:
+                change_feed.append(
+                    self._insert_change_event(
+                        cur,
+                        procurement_number=card.procurement_number,
+                        detected_at=finished_at,
+                        field_name="procurement",
+                        old_value="",
+                        new_value=card.procurement_number,
+                        change_type="NEW_PROCUREMENT",
+                    )
+                )
+                changes_count += 1
             if is_changed:
                 for display_name, attr in TRACKED_FIELDS.items():
                     old_value = old_json.get(attr)
                     new_value = getattr(card, attr)
-                    if str(old_value) != str(new_value):
-                        cur.execute(
-                            """
-                            INSERT INTO changes
-                            (procurement_number, detected_at, field_name, old_value, new_value, change_type)
-                            VALUES (?, ?, ?, ?, ?, ?)
-                            """,
-                            (
-                                card.procurement_number,
-                                finished_at,
-                                display_name,
-                                "" if old_value is None else str(old_value),
-                                "" if new_value is None else str(new_value),
-                                "updated",
-                            ),
+                    if _string_value(old_value) != _string_value(new_value):
+                        change_feed.append(
+                            self._insert_change_event(
+                                cur,
+                                procurement_number=card.procurement_number,
+                                detected_at=finished_at,
+                                field_name=display_name,
+                                old_value=old_value,
+                                new_value=new_value,
+                                change_type="updated",
+                            )
+                        )
+                        changes_count += 1
+            if assessment and old_assessment_json:
+                for display_name, attr in ASSESSMENT_TRACKED_FIELDS.items():
+                    old_value = old_assessment_json.get(attr)
+                    new_value = getattr(assessment, attr)
+                    if _string_value(old_value) != _string_value(new_value):
+                        change_feed.append(
+                            self._insert_change_event(
+                                cur,
+                                procurement_number=card.procurement_number,
+                                detected_at=finished_at,
+                                field_name=display_name,
+                                old_value=old_value,
+                                new_value=new_value,
+                                change_type="updated",
+                            )
                         )
                         changes_count += 1
 
@@ -562,8 +703,14 @@ class RadarState:
                 json.dumps(diagnostics, ensure_ascii=False),
             ),
         )
+        closed_events = self._closed_missing_procurements(current_numbers, finished_at)
+        change_feed.extend(closed_events)
+        changes_count += len(closed_events)
         self.connection.commit()
-        return {"changes_recorded": changes_count}
+        return {
+            "changes_recorded": changes_count,
+            "change_feed": [event.to_dict() for event in change_feed],
+        }
 
     def save_enrichment_run(
         self,
@@ -734,6 +881,18 @@ class RadarState:
             return None
         return NoCompetitionOpportunity(**json.loads(row["opportunity_json"]))
 
+    def get_opportunity_transition_history(self, procurement_number: str) -> list[sqlite3.Row]:
+        cur = self.connection.execute(
+            """
+            SELECT transition_type, previous_value, current_value, detected_at
+            FROM opportunity_transitions
+            WHERE procurement_number = ?
+            ORDER BY id ASC
+            """,
+            (procurement_number,),
+        )
+        return list(cur.fetchall())
+
     def save_opportunity_assessment(
         self,
         *,
@@ -743,8 +902,10 @@ class RadarState:
         opportunities: list[NoCompetitionOpportunity],
         transitions: list[OpportunityTransition],
         detected_at: str,
-    ) -> None:
+        active_procurement_numbers: list[str] | None = None,
+    ) -> list[dict[str, Any]]:
         cur = self.connection.cursor()
+        change_feed: list[ChangeFeedEvent] = []
         for event in failure_events:
             cur.execute(
                 """
@@ -778,7 +939,27 @@ class RadarState:
                     json.dumps(link.to_dict(), ensure_ascii=False),
                 ),
             )
+        active_opportunity_numbers = {opportunity.current_procurement_number for opportunity in opportunities}
+        scoped_numbers = set(active_procurement_numbers or [])
+        if scoped_numbers:
+            rows = cur.execute(
+                "SELECT current_procurement_number, opportunity_level FROM opportunity_assessments"
+            ).fetchall()
+            for row in rows:
+                number = row["current_procurement_number"]
+                if number not in scoped_numbers or number in active_opportunity_numbers:
+                    continue
+                transition = OpportunityTransition(
+                    procurement_number=number,
+                    transition_type="OPPORTUNITY_NO_LONGER_ACTIVE",
+                    previous_value=row["opportunity_level"],
+                    current_value="INACTIVE",
+                    detected_at=detected_at,
+                )
+                transitions.append(transition)
+
         for opportunity in opportunities:
+            previous = self.get_opportunity(opportunity.current_procurement_number)
             cur.execute(
                 """
                 INSERT OR REPLACE INTO opportunity_assessments
@@ -795,6 +976,34 @@ class RadarState:
                     json.dumps(opportunity.to_dict(), ensure_ascii=False),
                 ),
             )
+            if previous is None:
+                change_feed.append(
+                    ChangeFeedEvent(
+                        procurement_number=opportunity.current_procurement_number,
+                        event_type="NEW_OPPORTUNITY",
+                        detected_at=detected_at,
+                        field_name="opportunity",
+                        previous_value="",
+                        current_value=opportunity.opportunity_level,
+                        severity="INFO",
+                        source="opportunity_assessment",
+                        explanation="new opportunity detected",
+                    )
+                )
+            elif previous.opportunity_level != opportunity.opportunity_level or previous.opportunity_score != opportunity.opportunity_score:
+                change_feed.append(
+                    ChangeFeedEvent(
+                        procurement_number=opportunity.current_procurement_number,
+                        event_type="OPPORTUNITY_UPDATED",
+                        detected_at=detected_at,
+                        field_name="opportunity",
+                        previous_value=f"{previous.opportunity_level}:{previous.opportunity_score}",
+                        current_value=f"{opportunity.opportunity_level}:{opportunity.opportunity_score}",
+                        severity="NOTICE",
+                        source="opportunity_assessment",
+                        explanation="opportunity score or level changed",
+                    )
+                )
         for transition in transitions:
             cur.execute(
                 """
@@ -809,5 +1018,62 @@ class RadarState:
                     transition.current_value,
                     transition.detected_at or detected_at,
                 ),
-            )
+                )
+            if transition.transition_type == "OPEN_TO_CLOSED":
+                change_feed.append(
+                    ChangeFeedEvent(
+                        procurement_number=transition.procurement_number,
+                        event_type="PROCUREMENT_CLOSED",
+                        detected_at=transition.detected_at or detected_at,
+                        field_name="status",
+                        previous_value=transition.previous_value,
+                        current_value=transition.current_value,
+                        severity="WARNING",
+                        source="opportunity_transition",
+                        explanation="open procurement became closed",
+                    )
+                )
+            elif transition.transition_type == "NEW_OPPORTUNITY":
+                change_feed.append(
+                    ChangeFeedEvent(
+                        procurement_number=transition.procurement_number,
+                        event_type="NEW_OPPORTUNITY",
+                        detected_at=transition.detected_at or detected_at,
+                        field_name="opportunity",
+                        previous_value=transition.previous_value,
+                        current_value=transition.current_value,
+                        severity="INFO",
+                        source="opportunity_transition",
+                        explanation="new opportunity recorded",
+                    )
+                )
+            elif transition.transition_type == "OPPORTUNITY_UPDATED":
+                change_feed.append(
+                    ChangeFeedEvent(
+                        procurement_number=transition.procurement_number,
+                        event_type="OPPORTUNITY_UPDATED",
+                        detected_at=transition.detected_at or detected_at,
+                        field_name="opportunity",
+                        previous_value=transition.previous_value,
+                        current_value=transition.current_value,
+                        severity="NOTICE",
+                        source="opportunity_transition",
+                        explanation="opportunity details changed",
+                    )
+                )
+            elif transition.transition_type == "OPPORTUNITY_NO_LONGER_ACTIVE":
+                change_feed.append(
+                    ChangeFeedEvent(
+                        procurement_number=transition.procurement_number,
+                        event_type="OPPORTUNITY_NO_LONGER_ACTIVE",
+                        detected_at=transition.detected_at or detected_at,
+                        field_name="opportunity",
+                        previous_value=transition.previous_value,
+                        current_value=transition.current_value,
+                        severity="WARNING",
+                        source="opportunity_transition",
+                        explanation="previously detected opportunity is no longer active in this run",
+                    )
+                )
         self.connection.commit()
+        return [event.to_dict() for event in change_feed]

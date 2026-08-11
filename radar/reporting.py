@@ -171,6 +171,8 @@ def build_summary(
         "deadline_conflicts": diagnostics.get("deadline_conflicts", 0),
         "detail_unavailable": diagnostics.get("detail_unavailable", 0),
         "no_open_candidate_reason": diagnostics.get("no_open_candidate_reason", ""),
+        "change_events": len(diagnostics.get("change_feed", [])),
+        "change_feed": diagnostics.get("change_feed", []),
     }
 
 
@@ -214,6 +216,7 @@ def write_reports(
 
     json_payload = {
         "summary": summary,
+        "change_feed": diagnostics.get("change_feed", []),
         "items": [
             {
                 "card": card.to_dict(),
@@ -258,6 +261,10 @@ def write_reports(
         open_json = target / "open_verifications.json"
         open_json.write_text(json.dumps(diagnostics.get("open_verifications", []), ensure_ascii=False, indent=2), encoding="utf-8")
         write_simple_csv(target / "open_verifications.csv", diagnostics.get("open_verifications", []))
+    if diagnostics.get("change_feed") is not None:
+        change_json = target / "change_feed.json"
+        change_json.write_text(json.dumps(diagnostics.get("change_feed", []), ensure_ascii=False, indent=2), encoding="utf-8")
+        write_simple_csv(target / "change_feed.csv", diagnostics.get("change_feed", []))
     historical_diag_rows = [{key: value} for key, value in diagnostics.items() if key.startswith("historical_")]
     if historical_diag_rows:
         historical_diag_json = target / "historical_diagnostics.json"
@@ -664,6 +671,11 @@ def write_xlsx(
 
     diagnostics_sheet = wb.create_sheet("Run diagnostics")
     _write_table(diagnostics_sheet, [[key, json.dumps(value, ensure_ascii=False)] for key, value in diagnostics.items()], ["key", "value"])
+
+    change_sheet = wb.create_sheet("Change Feed")
+    change_rows = diagnostics.get("change_feed", [])
+    change_headers = search_headers(change_rows)
+    _write_table(change_sheet, rows_for_headers(change_rows, change_headers), change_headers)
     wb.save(path)
 
 
@@ -750,6 +762,16 @@ def render_markdown(
             lines.append(
                 f"- **{item.current_procurement_number}** <- {item.previous_procurement_number} "
                 f"score={item.opportunity_score}, level={item.opportunity_level}, confidence={item.republication_confidence}"
+            )
+        lines.append("")
+
+    change_feed = summary.get("change_feed", [])
+    if change_feed:
+        lines.append("## Change feed")
+        for item in change_feed[:30]:
+            lines.append(
+                f"- `{item.get('event_type', '')}` **{item.get('procurement_number', '')}** "
+                f"{item.get('field_name', '')}: {item.get('previous_value', '')} -> {item.get('current_value', '')}"
             )
         lines.append("")
 
