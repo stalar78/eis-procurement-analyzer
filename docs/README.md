@@ -19,6 +19,7 @@ This directory contains the public technical documentation for EIS Procurement A
 - [Historical result extraction](RADAR_RESULT_EXTRACTION.md) — 44-FZ/223-FZ result resolution, protocol parsing, multi-document assembly, and partial metric samples.
 - [R3B opportunity intelligence](RADAR_OPPORTUNITIES.md) — failed-procurement evidence, republication matching, opportunity scoring, safeguards, and live-validation status.
 - [R4A recurring change feed](RADAR_CHANGE_FEED.md) — persisted run comparison, meaningful transitions, idempotency, and change-feed reporting.
+- [R4B recurring orchestration](RADAR_ORCHESTRATION.md) — run locking, lifecycle persistence, failure isolation, exit codes, and runtime retention.
 
 ## Source of truth
 
