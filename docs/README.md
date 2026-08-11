@@ -18,12 +18,13 @@ This directory contains the public technical documentation for EIS Procurement A
 - [Analog selection](RADAR_ANALOG_SELECTION.md) — source-aware queries, Russian normalization, category gating, and explainable similarity.
 - [Historical result extraction](RADAR_RESULT_EXTRACTION.md) — 44-FZ/223-FZ result resolution, protocol parsing, multi-document assembly, and partial metric samples.
 - [R3B opportunity intelligence](RADAR_OPPORTUNITIES.md) — failed-procurement evidence, republication matching, opportunity scoring, safeguards, and live-validation status.
-- [R4A recurring change feed](RADAR_CHANGE_FEED.md) — persisted run comparison, meaningful transitions, idempotency, and change-feed reporting.
+- [R4A recurring change feed](RADAR_CHANGE_FEED.md) — persisted run comparison, meaningful transitions, idempotency, and evidence-based closure semantics.
 - [R4B recurring orchestration](RADAR_ORCHESTRATION.md) — run locking, lifecycle persistence, failure isolation, exit codes, and runtime retention.
 - [R4C alert filtering](RADAR_ALERTS.md) — notification-ready filtering, priority, deduplication, fingerprints, and alert reporting.
 - [R4D Telegram delivery](RADAR_TELEGRAM.md) — outbound Telegram delivery, credentials, retries, duplicate suppression, chunk persistence, and failure isolation.
 - [R4E production profile](RADAR_PRODUCTION.md) — production config, preflight, stable path resolution, secret handling, and external-scheduler runtime contract.
 - [R4F Windows deployment](RADAR_WINDOWS_DEPLOYMENT.md) — Windows launcher, Task Scheduler command contract, runtime logs, exit-code propagation, and deployment boundaries.
+- [R4F.1 state-transition guardrails](RADAR_STATE_GUARDRAILS.md) — explicit evidence requirements for procurement closure and opportunity inactivity before alerts or Telegram delivery.
 
 ## Source of truth
 
