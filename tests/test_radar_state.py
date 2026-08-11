@@ -2,7 +2,7 @@ from pathlib import Path
 
 from radar.config import RadarConfig
 from radar.discovery import normalize_card
-from radar.models import EligibilityStatus, NoCompetitionOpportunity, ProcurementFailureEvent
+from radar.models import EligibilityStatus, NoCompetitionOpportunity, OpportunityTransition, ProcurementFailureEvent
 from radar.scoring import assess_card
 from radar.state import RadarState
 
@@ -60,22 +60,22 @@ def test_status_and_assessment_changes_are_recorded(tmp_path: Path) -> None:
     assessment2 = assess_card(changed, EligibilityStatus.CLOSED, None, config, [], is_changed=True)
     result = state.save_run("r2", "s2", "f2", "a", "0.4.0-r4a-change-feed", {}, [changed], [assessment2])
     event_types = {event["event_type"] for event in result["change_feed"]}
-    assert {"STATUS_CHANGED", "NMCK_CHANGED", "PRELIMINARY_SCORE_CHANGED", "PRELIMINARY_DECISION_CHANGED"} <= event_types
+    assert {"PROCUREMENT_CLOSED", "NMCK_CHANGED", "PRELIMINARY_SCORE_CHANGED", "PRELIMINARY_DECISION_CHANGED"} <= event_types
     state.close()
 
 
-def test_missing_previous_open_procurement_is_classified_closed(tmp_path: Path) -> None:
+def test_missing_previous_open_procurement_is_not_classified_closed(tmp_path: Path) -> None:
     state = RadarState(tmp_path / "radar.db")
     config = RadarConfig()
     first = normalize_card({"procurement_number": "1", "title": "РћРґРёРЅ", "status_normalized": "APPLICATION_SUBMISSION"})
     second = normalize_card({"procurement_number": "2", "title": "Р”РІР°", "status_normalized": "APPLICATION_SUBMISSION"})
     state.save_run("r1", "s", "f", "a", "0.4.0-r4a-change-feed", {}, [first, second], [assess_card(first, EligibilityStatus.OPEN, 10, config, [], is_new=True), assess_card(second, EligibilityStatus.OPEN, 10, config, [], is_new=True)])
     result = state.save_run("r2", "s2", "f2", "a", "0.4.0-r4a-change-feed", {}, [second], [assess_card(second, EligibilityStatus.OPEN, 10, config, [])])
-    assert any(event["event_type"] == "PROCUREMENT_CLOSED" and event["procurement_number"] == "1" for event in result["change_feed"])
+    assert not any(event["event_type"] == "PROCUREMENT_CLOSED" and event["procurement_number"] == "1" for event in result["change_feed"])
     state.close()
 
 
-def test_opportunity_transition_feed_and_no_longer_active(tmp_path: Path) -> None:
+def test_absence_only_does_not_emit_opportunity_no_longer_active(tmp_path: Path) -> None:
     state = RadarState(tmp_path / "radar.db")
     opportunity = NoCompetitionOpportunity(current_procurement_number="1", previous_procurement_number="0", opportunity_score=60, opportunity_level="MEDIUM")
     first = state.save_opportunity_assessment(
@@ -97,5 +97,27 @@ def test_opportunity_transition_feed_and_no_longer_active(tmp_path: Path) -> Non
         active_procurement_numbers=["1"],
     )
     assert any(event["event_type"] == "NEW_OPPORTUNITY" for event in first)
-    assert any(event["event_type"] == "OPPORTUNITY_NO_LONGER_ACTIVE" for event in second)
+    assert not any(event["event_type"] == "OPPORTUNITY_NO_LONGER_ACTIVE" for event in second)
+    state.close()
+
+
+def test_explicit_opportunity_no_longer_active_transition_still_emits(tmp_path: Path) -> None:
+    state = RadarState(tmp_path / "radar.db")
+    result = state.save_opportunity_assessment(
+        algorithm_version="test",
+        failure_events=[],
+        republication_links=[],
+        opportunities=[],
+        transitions=[
+            OpportunityTransition(
+                procurement_number="1",
+                transition_type="OPPORTUNITY_NO_LONGER_ACTIVE",
+                previous_value="MEDIUM",
+                current_value="INACTIVE",
+                detected_at="f",
+            )
+        ],
+        detected_at="f",
+    )
+    assert any(event["event_type"] == "OPPORTUNITY_NO_LONGER_ACTIVE" for event in result)
     state.close()

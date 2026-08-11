@@ -23,6 +23,7 @@ ASSESSMENT_TRACKED_FIELDS = {
     "history_adjusted_score": "history_adjusted_score",
     "history_adjusted_decision": "history_adjusted_decision",
 }
+CLOSED_STATUS_VALUES = {"closed", "completed", "cancelled", "contract_signed", "contract signed"}
 
 
 def _string_value(value: Any) -> str:
@@ -695,30 +696,6 @@ class RadarState:
         )
         return event
 
-    def _closed_missing_procurements(self, current_numbers: set[str], finished_at: str) -> list[ChangeFeedEvent]:
-        cur = self.connection.cursor()
-        events: list[ChangeFeedEvent] = []
-        rows = cur.execute("SELECT procurement_number, current_json FROM procurements").fetchall()
-        for row in rows:
-            if row["procurement_number"] in current_numbers:
-                continue
-            payload = json.loads(row["current_json"])
-            previous_status = _string_value(payload.get("status_normalized"))
-            if previous_status.upper() in {"COMPLETED", "CANCELLED", "CONTRACT_SIGNED"}:
-                continue
-            events.append(
-                self._insert_change_event(
-                    cur,
-                    procurement_number=row["procurement_number"],
-                    detected_at=finished_at,
-                    field_name="open_state",
-                    old_value=previous_status or "previously_seen",
-                    new_value="not_observed_in_current_run",
-                    change_type="PROCUREMENT_CLOSED",
-                )
-            )
-        return events
-
     def enrichment_cache_skip_reason(
         self,
         procurement_number: str,
@@ -772,7 +749,6 @@ class RadarState:
         changes_count = 0
         change_feed: list[ChangeFeedEvent] = []
         assessment_by_number = {item.procurement_number: item for item in assessments}
-        current_numbers = {card.procurement_number for card in cards}
         for card in cards:
             assessment = assessment_by_number.get(card.procurement_number)
             existing = self.get_current(card.procurement_number)
@@ -831,6 +807,7 @@ class RadarState:
                     old_value = old_json.get(attr)
                     new_value = getattr(card, attr)
                     if _string_value(old_value) != _string_value(new_value):
+                        change_type = "PROCUREMENT_CLOSED" if display_name == "status" and _string_value(new_value).lower() in CLOSED_STATUS_VALUES else "updated"
                         change_feed.append(
                             self._insert_change_event(
                                 cur,
@@ -839,7 +816,7 @@ class RadarState:
                                 field_name=display_name,
                                 old_value=old_value,
                                 new_value=new_value,
-                                change_type="updated",
+                                change_type=change_type,
                             )
                         )
                         changes_count += 1
@@ -929,9 +906,6 @@ class RadarState:
                 json.dumps(diagnostics, ensure_ascii=False),
             ),
         )
-        closed_events = self._closed_missing_procurements(current_numbers, finished_at)
-        change_feed.extend(closed_events)
-        changes_count += len(closed_events)
         self.connection.commit()
         return {
             "changes_recorded": changes_count,
@@ -1165,25 +1139,6 @@ class RadarState:
                     json.dumps(link.to_dict(), ensure_ascii=False),
                 ),
             )
-        active_opportunity_numbers = {opportunity.current_procurement_number for opportunity in opportunities}
-        scoped_numbers = set(active_procurement_numbers or [])
-        if scoped_numbers:
-            rows = cur.execute(
-                "SELECT current_procurement_number, opportunity_level FROM opportunity_assessments"
-            ).fetchall()
-            for row in rows:
-                number = row["current_procurement_number"]
-                if number not in scoped_numbers or number in active_opportunity_numbers:
-                    continue
-                transition = OpportunityTransition(
-                    procurement_number=number,
-                    transition_type="OPPORTUNITY_NO_LONGER_ACTIVE",
-                    previous_value=row["opportunity_level"],
-                    current_value="INACTIVE",
-                    detected_at=detected_at,
-                )
-                transitions.append(transition)
-
         for opportunity in opportunities:
             previous = self.get_opportunity(opportunity.current_procurement_number)
             cur.execute(
