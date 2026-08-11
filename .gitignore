@@ -69,3 +69,5 @@ NEXT_STEP_README.txt
 !tests/fixtures/**/*.json
 
 PUBLICATION_AUDIT.md
+RADAR_R3A1_LIVE_VALIDATION.md
+runtime-logs/
