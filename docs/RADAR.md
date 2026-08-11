@@ -4,7 +4,7 @@
 
 EIS Procurement Radar is the stateful decision-support layer of EIS Procurement Analyzer. It turns live EIS search results into a bounded, explainable pipeline for identifying procurements worth manual review, tracking meaningful changes across recurring runs, surfacing a compact alert feed, optionally delivering that feed to Telegram, and running through a stable Windows production launcher.
 
-Current Radar version: `0.4.5-r4f-windows-deployment`.
+Current Radar version: `0.4.6-r4f1-state-guardrails`.
 
 The Radar is intentionally conservative. It does not submit applications or replace legal/commercial review.
 
@@ -22,7 +22,8 @@ Windows production launcher / production preflight
     -> competition metrics + confidence
     -> history-adjusted assessment
     -> failed-procurement / republication opportunity intelligence
-    -> recurring-state comparison / change feed
+    -> recurring-state comparison / evidence-based transitions
+    -> change feed
     -> alert filtering / deduplication / priority
     -> optional Telegram delivery
     -> controlled document enrichment
@@ -37,6 +38,12 @@ Windows production launcher / production preflight
 
 R4A reuses the existing SQLite state and emits meaningful `ChangeFeedEvent` transitions rather than repeating unchanged observations.
 
+R4F.1 tightens the transition contract: absence from a bounded run is not business-state evidence. A previously seen procurement that is missing from the next run remains previously observed state; it is not automatically marked closed.
+
+`PROCUREMENT_CLOSED` now requires an explicit observed transition into a supported closed status, including `closed`, `completed`, `cancelled`, or contract-signed equivalents.
+
+Opportunity state follows the same rule. `OPPORTUNITY_NO_LONGER_ACTIVE` is emitted only from an explicit opportunity transition and is not inferred merely because the procurement or opportunity was absent from the latest bounded run.
+
 ### Recurring orchestration
 
 R4B adds atomic `radar.lock` acquisition, stale-lock recovery, lifecycle statuses `STARTED`, `SUCCESS`, `FAILED`, and `SKIPPED_LOCKED`, failure isolation, and bounded retention.
@@ -45,9 +52,13 @@ R4B adds atomic `radar.lock` acquisition, stale-lock recovery, lifecycle statuse
 
 R4C adds `radar.alerts`, which promotes high-value changes, suppresses noise, assigns alert priority, deduplicates multiple events for the same procurement, and stores alert fingerprints so identical alerts are not re-emitted.
 
+R4F.1 ensures absence-only cases never create closure/inactivity source events, so they cannot be promoted into alerts downstream.
+
 ### Telegram delivery
 
 R4D adds `radar.telegram_delivery`, an optional outbound-only adapter. It consumes only the filtered `alert_feed`, uses environment-based credentials by default, persists alert- and chunk-level delivery state, and retries transient failures without resending chunks already delivered successfully.
+
+Because Telegram receives only filtered alerts, the R4F.1 transition guardrail also prevents absence-only cases from reaching the delivery adapter.
 
 ### Production profile and preflight
 
@@ -67,8 +78,6 @@ The launcher:
 - preserves the exact Radar process exit code.
 
 Task Scheduler must use the absolute local path to the launcher as `Program/script`. This path is a machine deployment value and is deliberately not hardcoded into tracked files. `Start in` is optional because the launcher resolves the project root itself.
-
-`radar.windows_deployment.task_scheduler_command()` exposes the command contract programmatically and returns an absolute launcher path for the local checkout while keeping that path out of committed configuration.
 
 ## Windows launcher examples
 
@@ -123,8 +132,16 @@ The launcher does not pass credentials on the command line. Real credentials mus
 - R4D: `168 passed`
 - R4E: `176 passed`
 - R4F: `181 passed`
+- R4F.1: `183 passed`
 
-R4F deterministic tests cover launcher execution from an unrelated current working directory, absolute Task Scheduler launcher paths, exact preflight exit-code propagation through the CMD launcher, runtime logging, preflight argument behavior, and the narrow validation-artifact ignore rule.
+R4F.1 deterministic tests cover:
+
+- a previously open procurement omitted from a later bounded run does not emit `PROCUREMENT_CLOSED`;
+- an omitted opportunity does not emit `OPPORTUNITY_NO_LONGER_ACTIVE`;
+- an explicit observed closed status still emits `PROCUREMENT_CLOSED`;
+- an explicit inactivity transition still emits `OPPORTUNITY_NO_LONGER_ACTIVE`;
+- absence-only cases produce no alert;
+- absence-only cases trigger no Telegram HTTP call.
 
 ## Safety and repository hygiene
 
@@ -145,3 +162,4 @@ See also:
 - [Telegram delivery](RADAR_TELEGRAM.md)
 - [Production profile](RADAR_PRODUCTION.md)
 - [Windows deployment](RADAR_WINDOWS_DEPLOYMENT.md)
+- [State-transition guardrails](RADAR_STATE_GUARDRAILS.md)
