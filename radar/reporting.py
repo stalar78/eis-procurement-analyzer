@@ -173,6 +173,8 @@ def build_summary(
         "no_open_candidate_reason": diagnostics.get("no_open_candidate_reason", ""),
         "change_events": len(diagnostics.get("change_feed", [])),
         "change_feed": diagnostics.get("change_feed", []),
+        "alerts": len(diagnostics.get("alert_feed", [])),
+        "alert_feed": diagnostics.get("alert_feed", []),
     }
 
 
@@ -217,6 +219,7 @@ def write_reports(
     json_payload = {
         "summary": summary,
         "change_feed": diagnostics.get("change_feed", []),
+        "alert_feed": diagnostics.get("alert_feed", []),
         "items": [
             {
                 "card": card.to_dict(),
@@ -265,6 +268,10 @@ def write_reports(
         change_json = target / "change_feed.json"
         change_json.write_text(json.dumps(diagnostics.get("change_feed", []), ensure_ascii=False, indent=2), encoding="utf-8")
         write_simple_csv(target / "change_feed.csv", diagnostics.get("change_feed", []))
+    if diagnostics.get("alert_feed") is not None:
+        alert_json = target / "alert_feed.json"
+        alert_json.write_text(json.dumps(diagnostics.get("alert_feed", []), ensure_ascii=False, indent=2), encoding="utf-8")
+        write_simple_csv(target / "alert_feed.csv", diagnostics.get("alert_feed", []))
     historical_diag_rows = [{key: value} for key, value in diagnostics.items() if key.startswith("historical_")]
     if historical_diag_rows:
         historical_diag_json = target / "historical_diagnostics.json"
@@ -676,6 +683,11 @@ def write_xlsx(
     change_rows = diagnostics.get("change_feed", [])
     change_headers = search_headers(change_rows)
     _write_table(change_sheet, rows_for_headers(change_rows, change_headers), change_headers)
+
+    alert_sheet = wb.create_sheet("Alert Feed")
+    alert_rows = diagnostics.get("alert_feed", [])
+    alert_headers = search_headers(alert_rows)
+    _write_table(alert_sheet, rows_for_headers(alert_rows, alert_headers), alert_headers)
     wb.save(path)
 
 
@@ -772,6 +784,16 @@ def render_markdown(
             lines.append(
                 f"- `{item.get('event_type', '')}` **{item.get('procurement_number', '')}** "
                 f"{item.get('field_name', '')}: {item.get('previous_value', '')} -> {item.get('current_value', '')}"
+            )
+        lines.append("")
+
+    alert_feed = summary.get("alert_feed", [])
+    if alert_feed:
+        lines.append("## Alert feed")
+        for item in alert_feed[:30]:
+            lines.append(
+                f"- `{item.get('alert_priority', '')}` `{item.get('alert_type', '')}` "
+                f"**{item.get('procurement_number', '')}**: {item.get('reason', '')}"
             )
         lines.append("")
 

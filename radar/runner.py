@@ -6,6 +6,7 @@ from datetime import datetime
 from pathlib import Path
 
 from radar import radar_version
+from radar.alerts import build_alert_feed
 from radar.config import load_config
 from radar.discovery import discover_cards
 from radar.enrichment import run_enrichment
@@ -517,6 +518,14 @@ def _run_pipeline(args: argparse.Namespace, config, profiles, as_of: datetime, s
                 active_procurement_numbers=[card.procurement_number for card in cards],
             )
             diagnostics.setdefault("change_feed", []).extend(opportunity_change_feed)
+        alert_feed = build_alert_feed(
+            diagnostics.get("change_feed", []),
+            cards,
+            assessments,
+            config,
+            as_of,
+        )
+        diagnostics["alert_feed"] = state.save_alert_history(run_id, alert_feed)
         if enrichment_result is not None:
             state.save_enrichment_run(
                 enrichment_run_id=f"enrich_{run_id}",

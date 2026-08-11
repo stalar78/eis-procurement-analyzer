@@ -16,6 +16,14 @@ recurring:
   retain_successful_runs: 30
   retain_failed_runs: 30
 
+alerts:
+  enabled: true
+  minimum_new_score: 55
+  high_priority_score: 75
+  significant_opportunity_score_increase: 15
+  significant_nmck_change_percent: 20
+  urgent_deadline_days: 3
+
 filters:
   laws:
     - 44-FZ

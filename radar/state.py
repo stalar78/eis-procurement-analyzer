@@ -97,6 +97,19 @@ class RadarState:
         )
         cur.execute(
             """
+            CREATE TABLE IF NOT EXISTS alert_history (
+                alert_fingerprint TEXT PRIMARY KEY,
+                procurement_number TEXT,
+                alert_type TEXT,
+                alert_priority TEXT,
+                detected_at TEXT,
+                run_id TEXT,
+                alert_json TEXT
+            )
+            """
+        )
+        cur.execute(
+            """
             CREATE TABLE IF NOT EXISTS procurements (
                 procurement_number TEXT PRIMARY KEY,
                 current_json TEXT NOT NULL,
@@ -460,6 +473,41 @@ class RadarState:
             "SELECT * FROM recurring_run_lifecycle WHERE run_id = ? ORDER BY id DESC LIMIT 1",
             (run_id,),
         ).fetchone()
+
+    def get_alert_fingerprint(self, fingerprint: str) -> sqlite3.Row | None:
+        return self.connection.execute(
+            "SELECT * FROM alert_history WHERE alert_fingerprint = ?",
+            (fingerprint,),
+        ).fetchone()
+
+    def save_alert_history(self, run_id: str, alerts: list[dict[str, Any]]) -> list[dict[str, Any]]:
+        cur = self.connection.cursor()
+        emitted: list[dict[str, Any]] = []
+        for alert in alerts:
+            fingerprint = alert.get("fingerprint") or ""
+            if not fingerprint:
+                continue
+            if self.get_alert_fingerprint(fingerprint) is not None:
+                continue
+            cur.execute(
+                """
+                INSERT OR REPLACE INTO alert_history
+                (alert_fingerprint, procurement_number, alert_type, alert_priority, detected_at, run_id, alert_json)
+                VALUES (?, ?, ?, ?, ?, ?, ?)
+                """,
+                (
+                    fingerprint,
+                    alert.get("procurement_number", ""),
+                    alert.get("alert_type", ""),
+                    alert.get("alert_priority", ""),
+                    alert.get("detected_at", ""),
+                    run_id,
+                    json.dumps(alert, ensure_ascii=False),
+                ),
+            )
+            emitted.append(alert)
+        self.connection.commit()
+        return emitted
 
     def get_current(self, procurement_number: str) -> sqlite3.Row | None:
         cur = self.connection.execute(

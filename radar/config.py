@@ -30,6 +30,16 @@ class RecurringConfig:
 
 
 @dataclass
+class AlertConfig:
+    enabled: bool = True
+    minimum_new_score: int = 55
+    high_priority_score: int = 75
+    significant_opportunity_score_increase: int = 15
+    significant_nmck_change_percent: float = 20
+    urgent_deadline_days: int = 3
+
+
+@dataclass
 class FilterConfig:
     laws: list[str] = field(default_factory=lambda: ["44-FZ", "223-FZ"])
     statuses: list[str] = field(default_factory=lambda: ["application_submission"])
@@ -207,6 +217,7 @@ class OpportunitiesConfig:
 class RadarConfig:
     radar: RadarRuntimeConfig = field(default_factory=RadarRuntimeConfig)
     recurring: RecurringConfig = field(default_factory=RecurringConfig)
+    alerts: AlertConfig = field(default_factory=AlertConfig)
     filters: FilterConfig = field(default_factory=FilterConfig)
     scoring: ScoringConfig = field(default_factory=ScoringConfig)
     enrichment: EnrichmentConfig = field(default_factory=EnrichmentConfig)
@@ -233,6 +244,7 @@ def load_config(path: str | Path | None = None) -> RadarConfig:
     data = yaml.safe_load(Path(path).read_text(encoding="utf-8")) or {}
     _merge_dataclass(config.radar, data.get("radar", {}))
     _merge_dataclass(config.recurring, data.get("recurring", {}))
+    _merge_dataclass(config.alerts, data.get("alerts", {}))
     _merge_dataclass(config.filters, data.get("filters", {}))
     _merge_dataclass(config.scoring, data.get("scoring", {}))
     _merge_dataclass(config.enrichment, data.get("enrichment", {}))
