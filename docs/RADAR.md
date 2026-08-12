@@ -2,21 +2,21 @@
 
 ## Purpose
 
-EIS Procurement Radar is the stateful decision-support layer of EIS Procurement Analyzer. It turns live EIS search results into a bounded, explainable pipeline for identifying procurements worth manual review, tracking meaningful changes across recurring runs, surfacing a compact alert feed, optionally delivering that feed to Telegram, and running through a stable Windows production launcher.
+EIS Procurement Radar is the stateful decision-support layer of EIS Procurement Analyzer. It turns live EIS search results into a bounded, explainable pipeline for identifying procurements worth manual review, tracking meaningful changes across recurring runs, surfacing a compact alert feed, optionally delivering that feed to Telegram, and running through a stable Windows production launcher and Task Scheduler deployment.
 
-Current Radar version: `0.4.6-r4f1-state-guardrails`.
+Current Radar version: `0.4.8-r4f3-detail-verification-degradation`.
 
 The Radar is intentionally conservative. It does not submit applications or replace legal/commercial review.
 
 ## End-to-end flow
 
 ```text
-Windows production launcher / production preflight
+Windows production launcher / production preflight / Task Scheduler
     -> recurring orchestration / lock
     -> active EIS discovery
     -> deduplication and state
     -> provisional eligibility/scoring
-    -> detail-page open verification
+    -> detail-page open verification with degradation policy
     -> historical analog search
     -> historical result/protocol extraction
     -> competition metrics + confidence
@@ -40,13 +40,21 @@ R4A reuses the existing SQLite state and emits meaningful `ChangeFeedEvent` tran
 
 R4F.1 tightens the transition contract: absence from a bounded run is not business-state evidence. A previously seen procurement that is missing from the next run remains previously observed state; it is not automatically marked closed.
 
-`PROCUREMENT_CLOSED` now requires an explicit observed transition into a supported closed status, including `closed`, `completed`, `cancelled`, or contract-signed equivalents.
+`PROCUREMENT_CLOSED` requires an explicit observed transition into a supported closed status, including `closed`, `completed`, `cancelled`, or contract-signed equivalents.
 
 Opportunity state follows the same rule. `OPPORTUNITY_NO_LONGER_ACTIVE` is emitted only from an explicit opportunity transition and is not inferred merely because the procurement or opportunity was absent from the latest bounded run.
 
-### Recurring orchestration
+### Recurring orchestration and recovery
 
 R4B adds atomic `radar.lock` acquisition, stale-lock recovery, lifecycle statuses `STARTED`, `SUCCESS`, `FAILED`, and `SKIPPED_LOCKED`, failure isolation, and bounded retention.
+
+R4F.2 strengthens Windows recovery for interrupted runs. When an existing lock contains a PID that is provably no longer alive, Radar can recover the orphan lock immediately instead of waiting for the age timeout. Live PIDs remain protected, and missing/malformed/indeterminate PID cases keep the conservative age-based fallback.
+
+### Live detail verification
+
+R4F.3 separates unavailable verification from negative verification evidence. A provisionally-open candidate is kept when detail verification returns `DETAIL_UNAVAILABLE` or when the candidate lies beyond the configured verification limit. `VERIFIED_CLOSED`, `VERIFIED_CANCELLED`, `STATUS_CONFLICT`, and `DEADLINE_CONFLICT` remain rejecting outcomes.
+
+This prevents temporary detail-page/network unavailability from erasing otherwise valid active-search evidence without falsely converting unavailability into `VERIFIED_OPEN`.
 
 ### Alert filtering
 
@@ -58,7 +66,9 @@ R4F.1 ensures absence-only cases never create closure/inactivity source events, 
 
 R4D adds `radar.telegram_delivery`, an optional outbound-only adapter. It consumes only the filtered `alert_feed`, uses environment-based credentials by default, persists alert- and chunk-level delivery state, and retries transient failures without resending chunks already delivered successfully.
 
-Because Telegram receives only filtered alerts, the R4F.1 transition guardrail also prevents absence-only cases from reaching the delivery adapter.
+The Telegram path has been validated with a controlled live end-to-end run: active EIS discovery produced 13 candidates and 13 change events, a temporary isolated test threshold selected 4 alerts, and all 4 were delivered successfully. Production thresholds were not changed by that validation.
+
+R4F.2.1 also isolates tests from host Telegram environment variables so local real/test credentials cannot alter deterministic test behavior or leak into assertion output.
 
 ### Production profile and preflight
 
@@ -66,45 +76,39 @@ R4E adds `--production`, `config/radar.production.yaml`, stable project-root pat
 
 ### Windows deployment support
 
-R4F adds `scripts/radar-production.cmd` and `radar.windows_deployment`.
+R4F adds `scripts/radar-production.cmd`. The current repository also includes `scripts/register-radar-task.ps1` for idempotent registration/update of the local scheduled task.
 
 The launcher:
 
 - derives the project root from its own location rather than the current working directory;
 - explicitly uses the project's `.venv\Scripts\python.exe`;
 - invokes the existing `radar.runner --production` path rather than implementing another runtime pipeline;
-- supports normal production execution and `--preflight-only` passthrough;
+- supports normal production execution and CLI passthrough such as `--preflight-only` or `--send-telegram-alerts`;
 - redirects stdout/stderr to timestamped files under `runtime-logs/`;
 - preserves the exact Radar process exit code.
 
-Task Scheduler must use the absolute local path to the launcher as `Program/script`. This path is a machine deployment value and is deliberately not hardcoded into tracked files. `Start in` is optional because the launcher resolves the project root itself.
+The registration script creates/updates `Stalar Procurement Radar`, schedules it every three hours, uses the repository root as the working directory, passes only `--send-telegram-alerts`, and configures Task Scheduler to ignore overlapping starts while Radar's own lock remains the second line of protection.
+
+The current task registration uses the current Windows user with interactive logon semantics and has been manually validated through Task Scheduler with result code `0` and no residual `radar.lock`.
 
 ## Windows launcher examples
 
 Preflight:
 
 ```powershell
-scripts\radar-production.cmd --preflight-only
+scripts\radar-production.cmd --preflight-only --verbose --send-telegram-alerts
 ```
 
 Production run:
 
 ```powershell
-scripts\radar-production.cmd
+scripts\radar-production.cmd --send-telegram-alerts
 ```
 
-Task Scheduler shape:
+Register/update the scheduled task:
 
-```text
-Program/script: <absolute-local-project-path>\scripts\radar-production.cmd
-Arguments:      (empty)
-Start in:       optional
-```
-
-Preflight task/check:
-
-```text
-Arguments: --preflight-only
+```powershell
+powershell -ExecutionPolicy Bypass -File scripts\register-radar-task.ps1
 ```
 
 ## Configuration and secrets
@@ -118,7 +122,7 @@ RADAR_TELEGRAM_BOT_TOKEN
 RADAR_TELEGRAM_CHAT_ID
 ```
 
-The launcher does not pass credentials on the command line. Real credentials must remain outside Git.
+The launcher and scheduler registration do not pass credential values on the command line. Real credentials must remain outside Git.
 
 ## Runtime data
 
@@ -133,15 +137,19 @@ The launcher does not pass credentials on the command line. Real credentials mus
 - R4E: `176 passed`
 - R4F: `181 passed`
 - R4F.1: `183 passed`
+- R4F.2 / R4F.2.1 / R4F.3 accepted suite: `193 passed`
 
-R4F.1 deterministic tests cover:
+R4F.3 validation covers, among other cases:
 
-- a previously open procurement omitted from a later bounded run does not emit `PROCUREMENT_CLOSED`;
-- an omitted opportunity does not emit `OPPORTUNITY_NO_LONGER_ACTIVE`;
-- an explicit observed closed status still emits `PROCUREMENT_CLOSED`;
-- an explicit inactivity transition still emits `OPPORTUNITY_NO_LONGER_ACTIVE`;
-- absence-only cases produce no alert;
-- absence-only cases trigger no Telegram HTTP call.
+- absence-only procurement/opportunity observations do not become closure/inactivity evidence;
+- explicit closure/inactivity evidence still produces the supported transitions;
+- Windows dead-PID locks are recoverable while live-PID locks remain protected;
+- host Telegram environment credentials are isolated from tests;
+- `DETAIL_UNAVAILABLE` preserves a provisionally-open candidate;
+- `VERIFIED_OPEN` preserves a candidate;
+- verified closed/cancelled candidates are removed;
+- candidates beyond the detail-verification limit are not dropped;
+- diagnostics preserve unavailable/skipped/rejected verification information.
 
 ## Safety and repository hygiene
 
