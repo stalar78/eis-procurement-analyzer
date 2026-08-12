@@ -2,23 +2,28 @@
 
 EIS Procurement Analyzer is a rule-based Python pipeline for collecting, downloading, classifying, and analyzing public procurement materials from the Russian EIS system.
 
-The repository includes **EIS Procurement Radar**: a stateful decision-support layer that discovers active procurements, verifies open status, evaluates technical fit, searches historical analogs, extracts competition evidence, detects failed-procurement/republication opportunities, tracks changes across recurring runs, filters those changes into a compact alert feed, optionally delivers alerts to Telegram, and exposes a stable Windows production launcher with preflight validation.
+The repository includes **EIS Procurement Radar**: a stateful decision-support layer that discovers active procurements, verifies open status, evaluates technical fit, searches historical analogs, extracts competition evidence, detects failed-procurement/republication opportunities, tracks changes across recurring runs, filters those changes into a compact alert feed, optionally delivers alerts to Telegram, and supports recurring Windows production execution through Task Scheduler.
 
 The project is **not** a legal, financial, automated participation, or automated bidding service.
 
 ## Current status
 
-- Radar version: `0.4.6-r4f1-state-guardrails`
+- Radar version: `0.4.8-r4f3-detail-verification-degradation`
 - Historical result extraction version: `0.3.4-r3a-result-extraction`
 - Opportunity intelligence version: `0.3.5-r3b-opportunities`
-- Full local test suite at the R4F.1 milestone: `183 passed`
+- Full local test suite at the R4F.3 milestone: `193 passed`
 - R4A adds an idempotent recurring-run change feed.
 - R4B adds reliable recurring execution with locking, lifecycle persistence, failure isolation, and retention.
 - R4C adds deterministic alert filtering, prioritization, deduplication, and alert-history idempotency.
 - R4D adds optional Telegram delivery with persisted alert/chunk status and retry-safe partial delivery.
 - R4E adds a production profile, stable path resolution, fail-fast preflight checks, and a scheduler-friendly entry point.
-- R4F adds a Windows launcher contract for Task Scheduler, timestamped runtime logs, exact exit-code propagation, and narrow runtime-artifact ignores.
+- R4F adds a Windows launcher contract, timestamped runtime logs, exact exit-code propagation, and narrow runtime-artifact ignores.
 - R4F.1 hardens state transitions so absence from a bounded run is never treated as evidence of procurement closure or opportunity inactivity.
+- R4F.2 adds Windows PID-aware orphan-lock recovery while preserving conservative age-based fallback behavior.
+- R4F.2.1 isolates Telegram-related tests from host environment credentials without changing production credential precedence.
+- R4F.3 keeps provisionally-open candidates when detail verification is temporarily unavailable, while explicit closed/cancelled/conflict evidence remains rejecting.
+- Telegram end-to-end delivery has been validated through a controlled live run from EIS discovery through alert delivery.
+- Windows Task Scheduler deployment has been validated with a successful manual scheduled run and exact exit code `0`.
 
 ## Production entry points
 
@@ -38,7 +43,7 @@ Windows launcher:
 
 ```powershell
 scripts\radar-production.cmd --preflight-only
-scripts\radar-production.cmd
+scripts\radar-production.cmd --send-telegram-alerts
 ```
 
 The launcher resolves the project root from its own location, explicitly uses `.venv\Scripts\python.exe`, writes stdout/stderr to `runtime-logs\radar-YYYYMMDD-HHMMSS.log`, and returns the exact Radar exit code.
@@ -51,25 +56,38 @@ Recurring runs are intentionally bounded. A procurement may disappear from one r
 
 This prevents absence-only state changes from being promoted into alerts or sent through Telegram.
 
-## Windows Task Scheduler contract
+## Detail-verification degradation policy
 
-The scheduled task should use the **absolute local path** to `scripts\radar-production.cmd` as `Program/script`. That absolute path is deployment-specific and is intentionally not committed to the repository.
+`ACTIVE_ONLY` discovery first identifies provisionally-open cards from search evidence. Detail-page verification strengthens that evidence when available, but temporary detail-page failure is not treated as proof that a procurement is closed.
 
-Recommended shape:
+The R4F.3 policy is:
+
+- `VERIFIED_OPEN`: keep the candidate;
+- `DETAIL_UNAVAILABLE`: keep the provisionally-open candidate and preserve diagnostics;
+- verification skipped because of the configured limit: keep the provisionally-open candidate;
+- `VERIFIED_CLOSED` / `VERIFIED_CANCELLED`: reject the candidate;
+- `STATUS_CONFLICT` / `DEADLINE_CONFLICT`: retain the existing conservative rejecting semantics.
+
+A controlled live validation demonstrated 13 provisionally-open cards with 13 temporarily unavailable detail verifications remaining as 13 final discovery candidates instead of being incorrectly reduced to zero.
+
+## Windows Task Scheduler deployment
+
+The repository includes:
 
 ```text
-Program/script: <absolute local path>\scripts\radar-production.cmd
-Arguments:      (empty for a normal production run)
-Start in:       optional
+scripts\radar-production.cmd
+scripts\register-radar-task.ps1
 ```
 
-For deployment validation, use:
+The registration script creates or updates the task `Stalar Procurement Radar`, runs it under the current Windows user, uses the repository root as the working directory, passes only `--send-telegram-alerts`, ignores overlapping scheduler instances, and repeats every three hours.
 
-```text
-Arguments: --preflight-only
+Register or refresh the task from PowerShell:
+
+```powershell
+powershell -ExecutionPolicy Bypass -File scripts\register-radar-task.ps1
 ```
 
-The launcher does not depend on the Task Scheduler working directory.
+The current registration uses an interactive user logon context. It is therefore appropriate for the current workstation deployment while that user session is available; it is not a server/service-account deployment contract.
 
 ## Configuration and secrets
 
@@ -83,6 +101,8 @@ RADAR_TELEGRAM_CHAT_ID
 ```
 
 Do not place real secrets in tracked config, Task Scheduler command-line arguments, or repository files.
+
+The tracked production profile keeps Telegram disabled by default. The deployed scheduled task enables delivery at runtime with `--send-telegram-alerts` while credentials remain in the Windows user environment.
 
 ## Runtime data and repository safety
 
@@ -119,23 +139,23 @@ Tracked fixtures are synthetic/test-oriented and should not be replaced with rea
 .\.venv\Scripts\python.exe -m pytest -q
 ```
 
-R4F.1 validation covers absence-only procurement state, absence-only opportunity state, explicit closure, explicit opportunity inactivity, downstream alert suppression, and proof that absence-only cases do not trigger Telegram delivery.
+R4F.3 validation includes the state-transition guardrails, orphan-lock recovery, host Telegram credential isolation, and deterministic detail-verification degradation cases. The accepted local suite at this milestone is `193 passed`.
 
 ## Known limitations
 
 - The system is deterministic and rule-based; it does not currently use external LLM APIs, embeddings, or ML ranking.
 - Historical similarity and republication scoring are heuristic and explainable, not probabilistic.
 - Historical confidence may remain low with small usable samples.
-- Some EIS layouts may still require parser maintenance.
+- Some EIS layouts may still require parser maintenance; malformed/partial search cards can be skipped with a warning.
 - Live republication matching has not yet been demonstrated with a real bounded pair.
-- The repository provides deployment support but does not automatically register a Windows Task Scheduler task.
+- Current Task Scheduler registration uses an interactive Windows user context rather than a service account or unattended server identity.
 - Telegram support is outbound-only: no bot commands, polling, or inbound workflow is implemented.
 - The project does not bypass CAPTCHA, authentication boundaries, or closed access.
 - Final participation decisions require human legal, commercial, and technical review.
 
 ## Development direction
 
-R4A-R4F.1 now provide the operational chain from recurring procurement monitoring through alert delivery, Windows scheduler-safe execution, and evidence-based state transitions. The next step is machine deployment: configure local Telegram environment variables, rerun production preflight with delivery enabled, perform a controlled production run, and only then register the Windows Task Scheduler job.
+R4A-R4F.3 now provide a validated operational chain from recurring EIS discovery through evidence-based state transitions, alert filtering, Telegram delivery, resilient lock handling, and Windows Task Scheduler execution. The next work should focus on operational observation and targeted parser/resilience improvements driven by real recurring runs rather than adding another deployment layer immediately.
 
 ## License
 
