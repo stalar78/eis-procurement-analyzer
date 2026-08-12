@@ -38,13 +38,13 @@ A raw status string alone is not sufficient to make a procurement eligible.
 
 ## Provisional open eligibility
 
-A procurement is provisionally open only when the available card evidence supports the active stage and the application deadline is still in the future.
+A procurement is provisionally open only when the available search-card evidence supports the active stage and the application deadline is still in the future.
 
 Completion and cancellation signals override a future deadline.
 
 ## Detail-page verification
 
-For high-ranked provisional candidates, Radar can open the common-information page and verify:
+For bounded provisional candidates, Radar can open the common-information page and verify:
 
 - procurement number;
 - current status;
@@ -52,7 +52,27 @@ For high-ranked provisional candidates, Radar can open the common-information pa
 - cancellation state;
 - source URL consistency.
 
-Verification states distinguish confirmed-open procedures from status/deadline conflicts and unavailable detail pages.
+Verification states distinguish confirmed-open procedures from explicit negative/conflicting evidence and temporarily unavailable detail pages.
+
+### R4F.3 degradation policy
+
+Detail verification is an evidence-strengthening layer, not a requirement that can silently erase otherwise valid active-search evidence when EIS detail pages are temporarily unavailable.
+
+The current policy is:
+
+- `VERIFIED_OPEN` -> keep the candidate;
+- `DETAIL_UNAVAILABLE` -> keep the provisionally-open candidate and record the unavailable verification;
+- candidate not attempted because `verify_top_candidates_limit` was reached -> keep the provisionally-open candidate and record that verification was skipped due to the limit;
+- `VERIFIED_CLOSED` -> reject the candidate;
+- `VERIFIED_CANCELLED` -> reject the candidate;
+- `STATUS_CONFLICT` -> keep the existing conservative rejecting semantics;
+- `DEADLINE_CONFLICT` -> keep the existing conservative rejecting semantics.
+
+`DETAIL_UNAVAILABLE` is **not** converted into `VERIFIED_OPEN`. Radar preserves the candidate because the available evidence remains provisional rather than because the detail page confirmed it.
+
+If provisional candidates existed but explicit negative verification rejects all of them, diagnostics can report `ALL_PROVISIONAL_CANDIDATES_REJECTED_BY_DETAIL_VERIFICATION` instead of the less specific `NO_OPEN_CANDIDATES_FOUND`.
+
+A controlled live validation of R4F.3 observed 13 search cards with active raw status, future deadlines, and provisional-open eligibility. All 13 detail checks were temporarily unavailable. Under the degradation policy all 13 remained discovery candidates; before R4F.3 the same condition incorrectly reduced the final candidate set to zero.
 
 ## Query budgets
 
@@ -67,9 +87,11 @@ Live discovery is bounded. Configuration can limit:
 
 Fallback may broaden the date window or try additional source-aware queries, but should not silently fall back to closed procedures when the goal is live participation.
 
+A budget diagnostic such as `PAGE_BUDGET_REACHED` can therefore be a normal bounded-run outcome rather than an execution failure.
+
 ## Search diagnostics
 
-Discovery reports can preserve:
+Discovery reports preserve operational evidence including:
 
 - query/profile;
 - requested filters;
@@ -79,6 +101,12 @@ Discovery reports can preserve:
 - normalized status distribution;
 - future-deadline count;
 - provisional-open count;
+- detail verifications attempted;
+- verified-open / verified-closed / verified-cancelled counts;
+- status/deadline conflicts;
+- `detail_unavailable`;
+- `detail_verification_skipped_due_to_limit`;
+- `detail_verification_rejected`;
 - parse warnings and failure codes.
 
 Sensitive session data and cookies are not part of diagnostics.
@@ -101,4 +129,6 @@ Sensitive session data and cookies are not part of diagnostics.
 
 ## Interpretation
 
-Discovery answers only whether a procurement is a plausible live candidate. It does not establish technical feasibility or market attractiveness. Those questions are handled by historical intelligence and document enrichment.
+Discovery answers whether a procurement is a plausible live candidate and records the confidence/evidence state of that decision. Temporary inability to open a detail page is therefore represented as unavailable verification rather than silently rewritten as a closed procurement.
+
+Discovery does not establish technical feasibility or market attractiveness. Those questions are handled by historical intelligence, scoring, and document enrichment.
