@@ -1,10 +1,17 @@
 import subprocess
+import sys
 from pathlib import Path
+
+import pytest
 
 from radar.config import PROJECT_ROOT
 from radar.preflight import PREFLIGHT_EXIT_CODE
 
 
+WINDOWS_ONLY = pytest.mark.skipif(sys.platform != "win32", reason="requires cmd.exe and Windows batch semantics")
+
+
+@WINDOWS_ONLY
 def test_windows_launcher_command_shape_and_root_independence(tmp_path: Path, monkeypatch) -> None:
     unrelated = tmp_path / "cwd"
     unrelated.mkdir()
@@ -28,6 +35,7 @@ def test_windows_launcher_command_shape_and_root_independence(tmp_path: Path, mo
     assert (PROJECT_ROOT / "data").exists()
 
 
+@WINDOWS_ONLY
 def test_windows_launcher_preserves_preflight_exit_code(tmp_path: Path, monkeypatch) -> None:
     unrelated = tmp_path / "cwd"
     unrelated.mkdir()

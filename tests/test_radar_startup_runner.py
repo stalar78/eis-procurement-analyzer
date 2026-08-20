@@ -1,4 +1,5 @@
 import json
+import sys
 import subprocess
 import time
 from pathlib import Path
@@ -6,6 +7,9 @@ from pathlib import Path
 import pytest
 
 from radar.config import PROJECT_ROOT
+
+
+WINDOWS_ONLY = pytest.mark.skipif(sys.platform != "win32", reason="requires Windows PowerShell and cmd.exe")
 
 
 def _read(name: str) -> str:
@@ -90,6 +94,7 @@ def test_background_loop_uses_three_hour_default_interval_and_launcher_args() ->
     assert "Start-Sleep -Seconds $IntervalSeconds" in text
 
 
+@WINDOWS_ONLY
 def test_background_loop_continues_after_nonzero_radar_exit(tmp_path: Path) -> None:
     loop = _copy_loop_fixture(tmp_path, _launcher(exit_code=22))
     completed = _run_loop(loop, "-RunOnce")
@@ -99,6 +104,7 @@ def test_background_loop_continues_after_nonzero_radar_exit(tmp_path: Path) -> N
     assert "Radar production launcher exited with code 22." in log
 
 
+@WINDOWS_ONLY
 def test_two_concurrent_background_loops_have_one_owner_and_one_exit_75(tmp_path: Path) -> None:
     loop = _copy_loop_fixture(tmp_path, _launcher(sleep_seconds=3))
     first = _start_loop(loop, "-RunOnce")
@@ -124,6 +130,7 @@ def test_two_concurrent_background_loops_have_one_owner_and_one_exit_75(tmp_path
         "{not-json",
     ],
 )
+@WINDOWS_ONLY
 def test_dead_or_malformed_loop_lock_is_recovered(tmp_path: Path, payload) -> None:
     loop = _copy_loop_fixture(tmp_path, _launcher())
     lock = tmp_path / "runtime-logs" / "radar-background-loop.lock"
@@ -139,6 +146,7 @@ def test_dead_or_malformed_loop_lock_is_recovered(tmp_path: Path, payload) -> No
     assert (tmp_path / "runtime-logs" / "launcher-runs.txt").exists()
 
 
+@WINDOWS_ONLY
 def test_pid_reuse_mismatched_owner_metadata_is_recovered(tmp_path: Path) -> None:
     loop = _copy_loop_fixture(tmp_path, _launcher())
     lock = tmp_path / "runtime-logs" / "radar-background-loop.lock"
@@ -159,6 +167,7 @@ def test_pid_reuse_mismatched_owner_metadata_is_recovered(tmp_path: Path) -> Non
     assert not lock.exists()
 
 
+@WINDOWS_ONLY
 def test_live_matching_owner_rejects_second_runner(tmp_path: Path) -> None:
     loop = _copy_loop_fixture(tmp_path, _launcher(sleep_seconds=3))
     first = _start_loop(loop, "-RunOnce")
@@ -170,6 +179,7 @@ def test_live_matching_owner_rejects_second_runner(tmp_path: Path) -> None:
         first.wait(timeout=10)
 
 
+@WINDOWS_ONLY
 def test_runner_removes_lock_only_when_it_still_owns_it(tmp_path: Path) -> None:
     loop = _copy_loop_fixture(tmp_path, _launcher(sleep_seconds=2))
     lock = tmp_path / "runtime-logs" / "radar-background-loop.lock"
@@ -186,6 +196,7 @@ def test_runner_removes_lock_only_when_it_still_owns_it(tmp_path: Path) -> None:
             first.wait(timeout=5)
 
 
+@WINDOWS_ONLY
 def test_run_once_removes_owned_lock_after_launcher_exits(tmp_path: Path) -> None:
     loop = _copy_loop_fixture(tmp_path, _launcher())
     lock = tmp_path / "runtime-logs" / "radar-background-loop.lock"
