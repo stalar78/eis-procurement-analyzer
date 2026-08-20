@@ -11,7 +11,7 @@ from openpyxl import Workbook
 from openpyxl.styles import Font, PatternFill
 from openpyxl.utils import get_column_letter
 
-from radar import radar_version
+from radar import build_identity, radar_version
 from radar.historical import HistoricalAssessmentBundle
 from radar.models import ArtifactRecord, DeepAssessment, NoCompetitionOpportunity, RadarAssessment, RadarCard, RadarDecision
 
@@ -113,6 +113,7 @@ def build_summary(
     transitions = Counter(f"{item.preliminary_decision.value} -> {item.final_radar_decision.value}" for item in deep_assessments)
     return {
         "radar_version": radar_version,
+        "build_identity": build_identity(),
         "run_id": run_id,
         "run_started": started_at.isoformat(timespec="seconds"),
         "run_finished": finished_at.isoformat(timespec="seconds"),

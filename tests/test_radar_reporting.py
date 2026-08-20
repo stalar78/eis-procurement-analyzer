@@ -1,6 +1,7 @@
 import json
 from pathlib import Path
 
+import radar
 from radar.runner import run
 
 
@@ -26,6 +27,8 @@ def test_offline_report_is_created(tmp_path: Path) -> None:
     assert (output / "latest.xlsx").exists()
     payload = json.loads((output / "latest.json").read_text(encoding="utf-8"))
     assert payload["summary"]["unique_cards"] == 12
+    assert payload["summary"]["radar_version"] == radar.radar_version
+    assert payload["summary"]["build_identity"]
 
 
 def test_dry_run_does_not_modify_db_or_latest(tmp_path: Path) -> None:
@@ -35,4 +38,3 @@ def test_dry_run_does_not_modify_db_or_latest(tmp_path: Path) -> None:
     assert not db.exists()
     assert not (output / "latest.json").exists()
     assert list((output / "preview").glob("*/latest.json"))
-

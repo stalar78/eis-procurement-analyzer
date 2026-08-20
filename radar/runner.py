@@ -7,7 +7,7 @@ import sys
 from datetime import datetime
 from pathlib import Path
 
-from radar import radar_version
+from radar import build_identity, radar_version
 from radar.alerts import build_alert_feed
 from radar.config import PROJECT_ROOT, load_config, normalize_runtime_paths
 from radar.discovery import discover_cards
@@ -44,6 +44,7 @@ UNHEALTHY_LATEST_STATUSES = {"FAILED", "SKIPPED_LOCKED"}
 def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
     parser = argparse.ArgumentParser(description="EIS Procurement Radar Stage R1.")
     parser.add_argument("--config", default="config/radar.example.yaml")
+    parser.add_argument("--version", action="store_true")
     parser.add_argument("--production", action="store_true")
     parser.add_argument("--preflight-only", action="store_true")
     parser.add_argument("--profile")
@@ -284,6 +285,10 @@ def print_health_report(report: dict[str, object], *, max_age_hours: float, max_
 
 def run(argv: list[str] | None = None) -> int:
     args = parse_args(argv)
+    if args.version:
+        print(f"Radar version: {radar_version}")
+        print(f"Build identity: {build_identity()}")
+        return 0
     if args.production and args.config == "config/radar.example.yaml":
         args.config = str(PROJECT_ROOT / "config" / "radar.production.yaml")
     if args.production:
