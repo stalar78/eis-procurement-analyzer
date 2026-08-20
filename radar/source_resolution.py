@@ -182,11 +182,8 @@ def extract_card_from_source(number: str, url: str, html: str) -> RadarCard:
 
 def default_fetch(url: str) -> tuple[int | None, str, str]:
     import requests
-    import warnings
 
-    with warnings.catch_warnings():
-        warnings.simplefilter("ignore")
-        response = requests.get(url, timeout=45, verify=False, headers={"User-Agent": "Mozilla/5.0"})
+    response = requests.get(url, timeout=45, headers={"User-Agent": "Mozilla/5.0"})
     return response.status_code, response.url, response.text
 
 

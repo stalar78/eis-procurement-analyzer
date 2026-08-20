@@ -91,7 +91,6 @@ def load_offline_cards(path: str | Path) -> list[RadarCard]:
 
 def verify_cards_from_detail(cards: list[RadarCard], as_of: datetime, limit: int) -> list[dict[str, Any]]:
     import requests
-    import warnings
 
     results: list[dict[str, Any]] = []
     for card in cards[:limit]:
@@ -99,9 +98,7 @@ def verify_cards_from_detail(cards: list[RadarCard], as_of: datetime, limit: int
             results.append(unavailable_verification(card, "missing source URL", as_of).to_dict())
             continue
         try:
-            with warnings.catch_warnings():
-                warnings.simplefilter("ignore")
-                response = requests.get(card.source_url, timeout=30, verify=False)
+            response = requests.get(card.source_url, timeout=30)
             if response.status_code >= 400:
                 results.append(unavailable_verification(card, f"HTTP {response.status_code}", as_of).to_dict())
                 continue

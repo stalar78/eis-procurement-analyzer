@@ -3,9 +3,10 @@ from urllib.parse import parse_qs, urlparse
 from zoneinfo import ZoneInfo
 
 import pytest
+import requests
 
 from radar.config import RadarConfig
-from radar.discovery import discover_cards
+from radar.discovery import discover_cards, verify_cards_from_detail
 from radar.models import NormalizedStatus
 from radar.open_verification import (
     build_status_audit,
@@ -189,6 +190,42 @@ def test_valid_closed_detail_blocks() -> None:
     result = verify_open_from_detail_text(_verification_card(), _detail(status=COMPLETED_DETAIL_STATUS, deadline=""), _as_of())
 
     assert result.open_verification_status == "VERIFIED_CLOSED"
+
+
+def test_detail_verification_successful_https_fetch_uses_default_tls(monkeypatch) -> None:
+    card = _verification_card()
+    card.source_url = "https://zakupki.gov.ru/epz/order/notice/ea20/view/common-info.html"
+    calls = []
+
+    class Response:
+        status_code = 200
+        text = _detail()
+
+    def fake_get(url: str, **kwargs):
+        calls.append((url, kwargs))
+        return Response()
+
+    monkeypatch.setattr(requests, "get", fake_get)
+
+    result = verify_cards_from_detail([card], _as_of(), limit=1)[0]
+
+    assert result["open_verification_status"] == "VERIFIED_OPEN"
+    assert calls == [(card.source_url, {"timeout": 30})]
+
+
+def test_detail_verification_ssl_error_degrades_to_detail_unavailable(monkeypatch) -> None:
+    card = _verification_card()
+    card.source_url = "https://zakupki.gov.ru/epz/order/notice/ea20/view/common-info.html"
+
+    def fake_get(_url: str, **_kwargs):
+        raise requests.exceptions.SSLError("certificate verify failed")
+
+    monkeypatch.setattr(requests, "get", fake_get)
+
+    result = verify_cards_from_detail([card], _as_of(), limit=1)[0]
+
+    assert result["open_verification_status"] == "DETAIL_UNAVAILABLE"
+    assert result["open_verification_status"] != "VERIFIED_OPEN"
 
 
 def test_status_audit_aggregates_raw_labels() -> None:

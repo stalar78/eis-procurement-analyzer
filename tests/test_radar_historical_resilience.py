@@ -4,6 +4,8 @@ import json
 from datetime import datetime
 from pathlib import Path
 
+import requests
+
 from radar.config import RadarConfig
 from radar.discovery import normalize_card
 from radar.historical_live_validation import (
@@ -63,6 +65,37 @@ def test_single_404_does_not_confirm_not_found() -> None:
     result = resolve_procurement_source(NUMBER, source_url=f"https://zakupki.gov.ru/epz/order/notice/ea20/view/common-info.html?regNumber={NUMBER}", fetch=fetch, policy=SourceResolutionPolicy(max_attempts_per_strategy=1))
     assert result.status == "TEMPORARILY_UNAVAILABLE"
     assert result.attempts[0].error_code == "SOURCE_404_TRANSIENT"
+
+
+def test_source_resolution_ssl_error_degrades_to_temporarily_unavailable() -> None:
+    def fetch(_url: str):
+        raise requests.exceptions.SSLError("certificate verify failed")
+
+    result = resolve_procurement_source(
+        NUMBER,
+        source_url=f"https://zakupki.gov.ru/epz/order/notice/ea20/view/common-info.html?regNumber={NUMBER}",
+        fetch=fetch,
+        policy=SourceResolutionPolicy(max_attempts_per_strategy=1, enable_search_recovery=False, enable_alternate_section_recovery=False),
+    )
+
+    assert result.status == "TEMPORARILY_UNAVAILABLE"
+    assert result.status != "RESOLVED_LIVE"
+    assert result.attempts[0].error_code == "SOURCE_TEMPORARILY_UNAVAILABLE"
+
+
+def test_production_http_paths_do_not_disable_tls_verification() -> None:
+    production_modules = [
+        Path("radar/discovery.py"),
+        Path("radar/source_resolution.py"),
+        Path("radar/historical_live_validation.py"),
+        Path("radar/result_extraction.py"),
+    ]
+
+    for path in production_modules:
+        text = path.read_text(encoding="utf-8")
+        assert "verify=False" not in text
+        assert "disable_warnings" not in text
+        assert "InsecureRequestWarning" not in text
 
 
 def test_exact_number_search_recovers_stale_direct_url() -> None:

@@ -252,12 +252,9 @@ def resolve_source_card(number: str, source_url: str | None, fetch: Callable[[st
     diagnostics = {"procurement_number": number, "canonical_source_url": url, "status": "NOT_REQUESTED", "warnings": []}
     if fetch is None:
         import requests
-        import warnings
 
         def fetch(target: str) -> str:
-            with warnings.catch_warnings():
-                warnings.simplefilter("ignore")
-                response = requests.get(target, timeout=45, verify=False)
+            response = requests.get(target, timeout=45)
             response.raise_for_status()
             return response.text
 
@@ -525,11 +522,8 @@ def collect_result_for_analog(
     def tuple_fetch(target: str) -> tuple[int | None, str]:
         if fetch is None:
             import requests
-            import warnings
 
-            with warnings.catch_warnings():
-                warnings.simplefilter("ignore")
-                response = requests.get(target, timeout=45, verify=False, headers={"User-Agent": "Mozilla/5.0"})
+            response = requests.get(target, timeout=45, headers={"User-Agent": "Mozilla/5.0"})
             return response.status_code, response.text
         result = fetch(target)
         if isinstance(result, tuple):
@@ -920,12 +914,9 @@ def run_live_historical_validation(
         try:
             if fetch is None:
                 import requests
-                import warnings
 
                 def fetch(target: str) -> str:
-                    with warnings.catch_warnings():
-                        warnings.simplefilter("ignore")
-                        response = requests.get(target, timeout=45, verify=False)
+                    response = requests.get(target, timeout=45)
                     response.raise_for_status()
                     return response.text
 
