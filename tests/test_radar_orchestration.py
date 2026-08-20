@@ -83,8 +83,6 @@ def test_live_pid_keeps_fresh_lock_active(tmp_path: Path, monkeypatch) -> None:
         ),
         encoding="utf-8",
     )
-    monkeypatch.setattr(orchestration, "os", orchestration.os)
-    monkeypatch.setattr(orchestration.os, "name", "nt")
     monkeypatch.setattr(orchestration, "_windows_pid_status", lambda pid: True)
 
     code = run(_recurring_args(tmp_path))
@@ -107,8 +105,6 @@ def test_dead_pid_recovers_fresh_lock_immediately(tmp_path: Path, monkeypatch) -
         ),
         encoding="utf-8",
     )
-    monkeypatch.setattr(orchestration, "os", orchestration.os)
-    monkeypatch.setattr(orchestration.os, "name", "nt")
     monkeypatch.setattr(orchestration, "_windows_pid_status", lambda pid: False)
 
     code = run(_recurring_args(tmp_path))
@@ -126,8 +122,6 @@ def test_malformed_pid_falls_back_to_age_based_recovery_only(tmp_path: Path, mon
         json.dumps({"run_id": "broken", "pid": "not-a-number", "acquired_at": fresh.isoformat(timespec="seconds")}),
         encoding="utf-8",
     )
-    monkeypatch.setattr(orchestration, "os", orchestration.os)
-    monkeypatch.setattr(orchestration.os, "name", "nt")
     called: list[int] = []
     monkeypatch.setattr(orchestration, "_windows_pid_status", lambda pid: called.append(pid) or None)
 
@@ -169,8 +163,6 @@ def test_dead_pid_orphan_lock_is_released_after_successful_run(tmp_path: Path, m
         ),
         encoding="utf-8",
     )
-    monkeypatch.setattr(orchestration, "os", orchestration.os)
-    monkeypatch.setattr(orchestration.os, "name", "nt")
     monkeypatch.setattr(orchestration, "_windows_pid_status", lambda pid: False)
 
     code = run(_recurring_args(tmp_path))
