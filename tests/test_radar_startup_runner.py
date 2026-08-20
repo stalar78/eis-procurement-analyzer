@@ -56,6 +56,17 @@ def _wait_for_file(path: Path, timeout: float = 5) -> None:
     raise AssertionError(f"timed out waiting for {path}")
 
 
+def _replace_lock_when_released(lock: Path, payload: dict[str, object], timeout: float = 5) -> None:
+    deadline = time.monotonic() + timeout
+    while time.monotonic() < deadline:
+        try:
+            lock.write_text(json.dumps(payload), encoding="utf-8")
+            return
+        except PermissionError:
+            time.sleep(0.05)
+    raise AssertionError(f"timed out waiting for writable lock {lock}")
+
+
 def _launcher(exit_code: int = 0, sleep_seconds: int = 0) -> str:
     lines = [
         "@echo off",
@@ -187,7 +198,7 @@ def test_runner_removes_lock_only_when_it_still_owns_it(tmp_path: Path) -> None:
     try:
         _wait_for_file(lock)
         replacement = {"pid": 999999, "process_start_time": "2021-01-01T00:00:00.0000000Z", "owner_token": "other-owner"}
-        lock.write_text(json.dumps(replacement), encoding="utf-8")
+        _replace_lock_when_released(lock, replacement)
         assert first.wait(timeout=10) == 0
         assert json.loads(lock.read_text(encoding="utf-8")) == replacement
     finally:
