@@ -4,7 +4,7 @@
 
 EIS Procurement Radar is the stateful decision-support layer of EIS Procurement Analyzer. It turns live EIS search results into a bounded, explainable pipeline for identifying procurements worth manual review, tracking meaningful changes across recurring runs, surfacing a compact alert feed, optionally delivering that feed to Telegram, and running through a stable Windows production launcher plus a passwordless current-user Startup background runner.
 
-Current Radar version label: `0.4.8-r4f3-detail-verification-degradation`.
+Current Radar version label: `0.5.0-r4g6-health-hardening`.
 
 The Radar is intentionally conservative. It does not submit applications or replace legal/commercial review.
 
@@ -91,6 +91,29 @@ R4F.2.1 also isolates tests from host Telegram environment variables so local re
 
 R4E adds `--production`, `config/radar.production.yaml`, stable project-root path resolution, and `--preflight-only`. Production preflight validates config readability, runtime directory writability, operational values, and Telegram credential availability when Telegram is enabled. Preflight failure returns exit code `78` without starting the Radar pipeline.
 
+### Runtime health
+
+R4G.6 adds a read-only health check over the existing recurring lifecycle state. R4G.6.1 hardens that contract so latest `STARTED` runs are evaluated against their own maximum run duration instead of being hidden by a recent prior success.
+
+Default thresholds are:
+
+- last-success freshness: `7.0` hours;
+- maximum current `STARTED` duration: `12.0` hours.
+
+Health thresholds must be finite positive values. Unknown lifecycle states fail closed. A latest `FAILED`, `SKIPPED_LOCKED`, invalid `STARTED` timestamp, or `STARTED` older than the maximum run duration is `UNHEALTHY`.
+
+### Runtime provenance
+
+R4G.6.2 updates the Radar application version and adds a cached build identity based on the local Git short `HEAD` SHA when available. If Git metadata is unavailable, the value safely degrades to `unknown`.
+
+Use:
+
+```powershell
+.\.venv\Scripts\python.exe -m radar.runner --version
+```
+
+Generated report summaries contain both `radar_version` and `build_identity`, improving run provenance for diagnostics and incident review.
+
 ### Windows deployment support
 
 The active workstation deployment uses:
@@ -174,6 +197,9 @@ Milestone history:
 - detail-evidence hardening: `215 passed`
 - TLS integrity hardening: `219 passed`
 - background-runner hardening: `226 passed`
+- runtime health: `231 passed`
+- health-semantics hardening: `240 passed`
+- build provenance: `245 passed`
 
 Operational validation additionally demonstrated:
 
@@ -183,6 +209,8 @@ Operational validation additionally demonstrated:
 - actual Windows reboot/login automatically starting the Startup shortcut;
 - a new post-login background owner with fresh PID/start-time/token metadata;
 - automatic post-login Radar execution completing with launcher exit code `0`.
+
+Cross-platform CI contains both Linux and Windows jobs. The Windows job exercises the production launcher/background-loop surface and a full pytest run in a Windows `.venv`.
 
 ## Safety and repository hygiene
 
