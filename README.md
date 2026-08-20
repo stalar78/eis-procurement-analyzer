@@ -23,6 +23,8 @@ The project is **not** a legal, financial, automated participation, or automated
 - R4F.2.1 isolates Telegram-related tests from host environment credentials without changing production credential precedence.
 - R4F.3 keeps provisionally-open candidates when detail verification is temporarily unavailable, while explicit closed/cancelled/conflict evidence remains rejecting.
 - R4G hardening repairs the detail-evidence contract, restores normal TLS certificate verification in production EIS HTTP paths, removes the deprecated Task Scheduler deployment path, and hardens the passwordless Startup background loop with atomic singleton ownership and orphan/PID-reuse recovery.
+- R4G.4 adds GitHub Actions coverage for both Linux and Windows, including the Windows launcher/background-loop production surface and a full Windows pytest run.
+- R4G.5 pins all direct runtime dependencies and the dev/test dependency to exact validated versions for reproducible fresh installs.
 - Telegram end-to-end delivery has been validated through a controlled live run from EIS discovery through alert delivery.
 - Windows Startup deployment has been validated by an actual reboot/login: Windows started the hidden background loop automatically, the loop recovered the previous-session lock, executed Radar successfully, and remained alive for the next three-hour cycle.
 
@@ -156,7 +158,7 @@ Tracked fixtures are synthetic/test-oriented and should not be replaced with rea
 .\.venv\Scripts\python.exe -m pytest -q
 ```
 
-The latest accepted local suite after evidence-contract, TLS, and background-runner hardening is `226 passed`.
+The latest accepted local suite after evidence-contract, TLS, background-runner, Windows-CI, and dependency-pinning hardening is `226 passed`.
 
 ## Known limitations
 
@@ -166,15 +168,15 @@ The latest accepted local suite after evidence-contract, TLS, and background-run
 - Some EIS layouts may still require parser maintenance; malformed/partial search cards can be skipped with a warning.
 - Live republication matching has not yet been demonstrated with a real bounded pair.
 - The current Windows deployment is user-session based: Radar runs while the Windows user is logged in; it is not a Windows service or unattended server deployment.
-- Remote CI does not yet exercise the Windows-specific launcher/Startup contract; Windows CI remains a planned hardening step.
-- Dependency versions are not yet fully locked for reproducible production environments.
+- GitHub Actions exercises Windows launcher/background-loop behavior in an isolated runner environment; the real Startup installation itself is validated separately on the workstation rather than modified by CI.
+- Direct dependencies are pinned to exact versions, but there is no transitive lockfile yet.
 - Telegram support is outbound-only: no bot commands, polling, or inbound workflow is implemented.
 - The project does not bypass CAPTCHA, authentication boundaries, or closed access.
 - Final participation decisions require human legal, commercial, and technical review.
 
 ## Development direction
 
-The current operational chain is validated from Windows login through Startup background execution, production preflight, recurring Radar execution, evidence-based state transitions, alert filtering, Telegram delivery, and resilient lock recovery. The next hardening priorities are Windows CI for the production-specific surface and reproducible dependency locking, followed by parser/resilience improvements driven by real recurring runs.
+The current operational chain is validated from Windows login through Startup background execution, production preflight, recurring Radar execution, evidence-based state transitions, alert filtering, Telegram delivery, resilient lock recovery, cross-platform CI coverage, and reproducible direct dependency installation. The next hardening priorities are runtime health/last-success observability and parser/resilience improvements driven by real recurring runs.
 
 ## License
 
