@@ -11,7 +11,7 @@ The project is **not** a legal, financial, automated participation, or automated
 - Radar version label: `0.4.8-r4f3-detail-verification-degradation`
 - Historical result extraction version: `0.3.4-r3a-result-extraction`
 - Opportunity intelligence version: `0.3.5-r3b-opportunities`
-- Latest accepted local suite after R4G hardening: `226 passed`
+- Latest accepted local suite after R4G hardening: `231 passed`
 - R4A adds an idempotent recurring-run change feed.
 - R4B adds reliable recurring execution with locking, lifecycle persistence, failure isolation, and retention.
 - R4C adds deterministic alert filtering, prioritization, deduplication, and alert-history idempotency.
@@ -25,6 +25,7 @@ The project is **not** a legal, financial, automated participation, or automated
 - R4G hardening repairs the detail-evidence contract, restores normal TLS certificate verification in production EIS HTTP paths, removes the deprecated Task Scheduler deployment path, and hardens the passwordless Startup background loop with atomic singleton ownership and orphan/PID-reuse recovery.
 - R4G.4 adds GitHub Actions coverage for both Linux and Windows, including the Windows launcher/background-loop production surface and a full Windows pytest run.
 - R4G.5 pins all direct runtime dependencies and the dev/test dependency to exact validated versions for reproducible fresh installs.
+- R4G.6 adds a read-only runtime health command that reports the latest recurring lifecycle state, last successful run age, and a deterministic `HEALTHY` / `STALE` / `UNHEALTHY` classification.
 - Telegram end-to-end delivery has been validated through a controlled live run from EIS discovery through alert delivery.
 - Windows Startup deployment has been validated by an actual reboot/login: Windows started the hidden background loop automatically, the loop recovered the previous-session lock, executed Radar successfully, and remained alive for the next three-hour cycle.
 
@@ -41,6 +42,14 @@ Direct Python production run:
 ```powershell
 .\.venv\Scripts\python.exe -m radar.runner --production
 ```
+
+Read-only production health check:
+
+```powershell
+.\.venv\Scripts\python.exe -m radar.runner --production --health
+```
+
+The default health freshness threshold is seven hours. `HEALTHY` exits `0`, `STALE` exits `2`, and `UNHEALTHY` exits `3`. A latest `FAILED` or `SKIPPED_LOCKED` lifecycle record is reported as `UNHEALTHY` even when an earlier successful run is still fresh, so current failures are not hidden by last-success age.
 
 Windows launcher:
 
@@ -158,7 +167,7 @@ Tracked fixtures are synthetic/test-oriented and should not be replaced with rea
 .\.venv\Scripts\python.exe -m pytest -q
 ```
 
-The latest accepted local suite after evidence-contract, TLS, background-runner, Windows-CI, and dependency-pinning hardening is `226 passed`.
+The latest accepted local suite after evidence-contract, TLS, background-runner, Windows-CI, dependency-pinning, and runtime-health hardening is `231 passed`.
 
 ## Known limitations
 
@@ -170,13 +179,14 @@ The latest accepted local suite after evidence-contract, TLS, background-runner,
 - The current Windows deployment is user-session based: Radar runs while the Windows user is logged in; it is not a Windows service or unattended server deployment.
 - GitHub Actions exercises Windows launcher/background-loop behavior in an isolated runner environment; the real Startup installation itself is validated separately on the workstation rather than modified by CI.
 - Direct dependencies are pinned to exact versions, but there is no transitive lockfile yet.
+- Runtime health is currently a local read-only CLI check; it is not yet pushed to an external watchdog or notification channel.
 - Telegram support is outbound-only: no bot commands, polling, or inbound workflow is implemented.
 - The project does not bypass CAPTCHA, authentication boundaries, or closed access.
 - Final participation decisions require human legal, commercial, and technical review.
 
 ## Development direction
 
-The current operational chain is validated from Windows login through Startup background execution, production preflight, recurring Radar execution, evidence-based state transitions, alert filtering, Telegram delivery, resilient lock recovery, cross-platform CI coverage, and reproducible direct dependency installation. The next hardening priorities are runtime health/last-success observability and parser/resilience improvements driven by real recurring runs.
+The current operational chain is validated from Windows login through Startup background execution, production preflight, recurring Radar execution, evidence-based state transitions, alert filtering, Telegram delivery, resilient lock recovery, cross-platform CI coverage, reproducible direct dependency installation, and read-only runtime health evaluation. The next hardening priority is externalized health/watchdog signaling only if operational need justifies it; otherwise development should return to parser/resilience improvements driven by real recurring runs.
 
 ## License
 
