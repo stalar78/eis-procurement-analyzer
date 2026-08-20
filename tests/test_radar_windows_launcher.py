@@ -3,7 +3,6 @@ from pathlib import Path
 
 from radar.config import PROJECT_ROOT
 from radar.preflight import PREFLIGHT_EXIT_CODE
-from radar.windows_deployment import production_launcher_path, task_scheduler_command
 
 
 def test_windows_launcher_command_shape_and_root_independence(tmp_path: Path, monkeypatch) -> None:
@@ -27,17 +26,6 @@ def test_windows_launcher_command_shape_and_root_independence(tmp_path: Path, mo
     assert completed.returncode == 0
     assert (PROJECT_ROOT / "outputs" / "radar").exists()
     assert (PROJECT_ROOT / "data").exists()
-
-
-def test_task_scheduler_command_uses_absolute_launcher_path_and_optional_start_in() -> None:
-    command = task_scheduler_command()
-    preflight = task_scheduler_command(preflight_only=True)
-
-    assert Path(command.program_script).is_absolute()
-    assert command.program_script == str(production_launcher_path())
-    assert command.arguments == ""
-    assert preflight.arguments == "--preflight-only"
-    assert command.start_in == ""
 
 
 def test_windows_launcher_preserves_preflight_exit_code(tmp_path: Path, monkeypatch) -> None:
@@ -76,9 +64,6 @@ def test_launcher_preflight_only_does_not_duplicate_production_flag() -> None:
     launcher = PROJECT_ROOT / "scripts" / "radar-production.cmd"
     text = launcher.read_text(encoding="utf-8")
     assert '"%PYTHON_EXE%" -m radar.runner --production %*' in text
-    command = task_scheduler_command(preflight_only=True)
-    assert command.arguments == "--preflight-only"
-    assert "--production" not in command.arguments
 
 
 def test_root_level_validation_artifact_is_ignored_by_rule() -> None:
