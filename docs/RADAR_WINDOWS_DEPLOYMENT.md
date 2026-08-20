@@ -121,7 +121,7 @@ Do not place credentials in:
 
 The background loop passes only `--send-telegram-alerts`; credential values are read by Radar from the Windows user environment.
 
-## Preflight
+## Preflight and health
 
 Validate the production environment directly with:
 
@@ -136,6 +136,28 @@ scripts\radar-production.cmd --preflight-only --verbose --send-telegram-alerts
 ```
 
 A successful preflight returns exit code `0`. Preflight failure returns `78` and stops before normal recurring lifecycle execution.
+
+Read-only runtime health can be checked with:
+
+```powershell
+.\.venv\Scripts\python.exe -m radar.runner --production --health
+```
+
+The health command uses separate defaults for last-success freshness (`7.0` hours) and maximum current `STARTED` duration (`12.0` hours). Thresholds must be finite positive values. Failed/locked latest runs, unknown lifecycle states, and overlong or malformed `STARTED` runs fail closed as `UNHEALTHY`.
+
+This remains a local operator check. It is not an independent watchdog and does not replace the background loop.
+
+## Runtime provenance
+
+Current Radar version is `0.5.0-r4g6-health-hardening`.
+
+Use:
+
+```powershell
+.\.venv\Scripts\python.exe -m radar.runner --version
+```
+
+The command reports the application version and a cached short Git build identity when available. Generated report summaries include both `radar_version` and `build_identity`; Git unavailability degrades safely to `unknown`.
 
 ## Operational validation
 
@@ -192,7 +214,7 @@ Runtime logs, generated reports, SQLite state, locks, downloaded procurement mat
 
 ## Validation history
 
-Windows deployment evolved through several hardening steps. The accepted local test suite after the Startup/background-runner reliability work is `226 passed`.
+Windows deployment evolved through several hardening steps. The current accepted local full-suite baseline is `245 passed`.
 
 Behavioral coverage includes:
 
@@ -203,12 +225,16 @@ Behavioral coverage includes:
 - live matching owner rejection;
 - owner-safe cleanup;
 - `-RunOnce` cleanup;
-- continued loop behavior after a non-zero Radar launcher exit.
+- continued loop behavior after a non-zero Radar launcher exit;
+- hardened runtime-health semantics;
+- build provenance reporting.
 
 The actual reboot/login validation complements these tests with workstation runtime evidence.
 
-## Boundary and next hardening step
+GitHub Actions now contains both Linux and Windows jobs. The Windows job creates a project `.venv`, exercises the Windows production-surface tests, and runs the full pytest suite. This remote CI coverage complements but does not replace real workstation Startup validation.
+
+## Boundary and follow-up controls
 
 The deployment is validated for the current Windows workstation while the user is logged in. It is not intended to survive user logoff as a service.
 
-Remote CI still needs a Windows job that executes the Windows-specific launcher/PowerShell behavior. That CI work is a separate hardening step and does not change the current workstation runtime contract.
+Remaining operational follow-ups are intentionally separate from the deployment contract: an independent watchdog/notification path if autonomous monitoring becomes necessary, branch protection/required CI checks on `main`, and any future transition to an unattended service model.
