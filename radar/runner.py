@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import argparse
+import sqlite3
 import sys
 from datetime import datetime
 from pathlib import Path
@@ -28,6 +29,13 @@ from radar.search_profiles import load_search_profiles, select_profiles
 from radar.source_resolution import resolve_procurement_source
 from radar.state import RadarState
 from radar.telegram_delivery import deliver_alert_feed
+
+
+HEALTHY_EXIT_CODE = 0
+STALE_HEALTH_EXIT_CODE = 2
+UNHEALTHY_EXIT_CODE = 3
+DEFAULT_HEALTH_MAX_AGE_HOURS = 7.0
+UNHEALTHY_LATEST_STATUSES = {"FAILED", "SKIPPED_LOCKED"}
 
 
 def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
@@ -118,7 +126,113 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
     parser.add_argument("--no-send-telegram-alerts", action="store_true")
     parser.add_argument("--telegram-bot-token")
     parser.add_argument("--telegram-chat-id")
+    parser.add_argument("--health", action="store_true")
+    parser.add_argument("--health-max-age-hours", type=float, default=DEFAULT_HEALTH_MAX_AGE_HOURS)
     return parser.parse_args(argv)
+
+
+def _open_lifecycle_readonly(database: str) -> sqlite3.Connection | None:
+    path = Path(database)
+    if not path.exists():
+        return None
+    uri = f"file:{path.resolve().as_posix()}?mode=ro"
+    connection = sqlite3.connect(uri, uri=True)
+    connection.row_factory = sqlite3.Row
+    return connection
+
+
+def _parse_lifecycle_time(value: str) -> datetime | None:
+    if not value:
+        return None
+    try:
+        return datetime.fromisoformat(value)
+    except ValueError:
+        return None
+
+
+def _row_to_dict(row: sqlite3.Row | None) -> dict[str, str]:
+    return dict(row) if row is not None else {}
+
+
+def evaluate_health(database: str, *, now: datetime, max_age_hours: float) -> dict[str, object]:
+    connection = _open_lifecycle_readonly(database)
+    if connection is None:
+        return {
+            "health_status": "UNHEALTHY",
+            "reason": "database not found",
+            "latest": {},
+            "last_success": {},
+            "last_success_age_hours": None,
+        }
+    try:
+        latest = connection.execute("SELECT * FROM recurring_run_lifecycle ORDER BY id DESC LIMIT 1").fetchone()
+        last_success = connection.execute("SELECT * FROM recurring_run_lifecycle WHERE status = 'SUCCESS' ORDER BY id DESC LIMIT 1").fetchone()
+    except sqlite3.Error as error:
+        return {
+            "health_status": "UNHEALTHY",
+            "reason": f"lifecycle unavailable: {error}",
+            "latest": {},
+            "last_success": {},
+            "last_success_age_hours": None,
+        }
+    finally:
+        connection.close()
+
+    if last_success is None:
+        return {
+            "health_status": "UNHEALTHY",
+            "reason": "no successful recurring run recorded",
+            "latest": _row_to_dict(latest),
+            "last_success": {},
+            "last_success_age_hours": None,
+        }
+
+    latest_status = str(latest["status"] if latest else "")
+    success_time = _parse_lifecycle_time(last_success["finished_at"] or last_success["started_at"])
+    if success_time is None:
+        return {
+            "health_status": "UNHEALTHY",
+            "reason": "last successful run timestamp is invalid",
+            "latest": _row_to_dict(latest),
+            "last_success": _row_to_dict(last_success),
+            "last_success_age_hours": None,
+        }
+    if success_time.tzinfo is None and now.tzinfo is not None:
+        success_time = success_time.replace(tzinfo=now.tzinfo)
+    age_hours = max(0.0, (now - success_time).total_seconds() / 3600)
+
+    if latest_status in UNHEALTHY_LATEST_STATUSES:
+        health_status = "UNHEALTHY"
+        reason = f"latest lifecycle status is {latest_status}"
+    elif age_hours > max_age_hours:
+        health_status = "STALE"
+        reason = "last successful recurring run is stale"
+    else:
+        health_status = "HEALTHY"
+        reason = "last successful recurring run is fresh"
+    return {
+        "health_status": health_status,
+        "reason": reason,
+        "latest": _row_to_dict(latest),
+        "last_success": _row_to_dict(last_success),
+        "last_success_age_hours": round(age_hours, 2),
+    }
+
+
+def print_health_report(report: dict[str, object], *, max_age_hours: float) -> None:
+    latest = report.get("latest") or {}
+    last_success = report.get("last_success") or {}
+    latest_status = latest.get("status", "NONE") if isinstance(latest, dict) else "NONE"
+    latest_run_id = latest.get("run_id", "") if isinstance(latest, dict) else ""
+    success_at = ""
+    if isinstance(last_success, dict):
+        success_at = last_success.get("finished_at") or last_success.get("started_at") or ""
+    age = report.get("last_success_age_hours")
+    age_text = "unknown" if age is None else f"{age}h"
+    print(f"Radar health: {report['health_status']}")
+    print(f"Latest lifecycle: {latest_status} {latest_run_id}".rstrip())
+    print(f"Last success: {success_at or 'NONE'} age={age_text} max_age_hours={max_age_hours}")
+    print(f"Reason: {report['reason']}")
 
 
 def run(argv: list[str] | None = None) -> int:
@@ -152,6 +266,17 @@ def run(argv: list[str] | None = None) -> int:
         config.telegram.bot_token = args.telegram_bot_token
     if args.telegram_chat_id:
         config.telegram.chat_id = args.telegram_chat_id
+    if args.health:
+        if args.production:
+            normalize_runtime_paths(config, PROJECT_ROOT)
+        now = datetime.now().astimezone()
+        report = evaluate_health(config.radar.database, now=now, max_age_hours=args.health_max_age_hours)
+        print_health_report(report, max_age_hours=args.health_max_age_hours)
+        if report["health_status"] == "HEALTHY":
+            return HEALTHY_EXIT_CODE
+        if report["health_status"] == "STALE":
+            return STALE_HEALTH_EXIT_CODE
+        return UNHEALTHY_EXIT_CODE
     if args.production or args.preflight_only:
         normalize_runtime_paths(config, PROJECT_ROOT)
         preflight = run_production_preflight(args.config, config)
