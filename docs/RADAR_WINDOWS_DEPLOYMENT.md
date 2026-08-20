@@ -1,73 +1,107 @@
-# R4F Windows Deployment Support
+# Windows Deployment Support
 
-R4F provides the Windows-side runtime contract needed to launch EIS Procurement Radar reliably from Windows Task Scheduler without embedding secrets in the repository. The deployment path has now been validated with a real scheduled execution.
+The active Windows deployment for EIS Procurement Radar is a workstation-oriented, passwordless current-user Startup flow. It does not depend on Windows Task Scheduler, a stored Windows password, or administrator rights.
 
-## Launcher
-
-Tracked launcher:
+## Runtime chain
 
 ```text
-scripts/radar-production.cmd
+Windows login
+    -> current-user Startup shortcut
+    -> hidden PowerShell background loop
+    -> scripts\radar-production.cmd --send-telegram-alerts
+    -> radar.runner --production
 ```
 
-The launcher resolves the repository root from its own file location, explicitly uses `.venv\Scripts\python.exe`, enters the project root, and invokes:
+The deployment remains intentionally user-session based. It is not a Windows service or unattended server/service-account contract.
+
+## Tracked deployment files
+
+```text
+scripts\radar-production.cmd
+scripts\radar-background-loop.ps1
+scripts\install-radar-startup.ps1
+```
+
+The old `scripts/register-radar-task.ps1` helper has been removed. Task Scheduler is no longer the supported production deployment path.
+
+## Production launcher
+
+`scripts\radar-production.cmd` resolves the repository root from its own file location, explicitly uses `.venv\Scripts\python.exe`, enters the project root, and invokes:
 
 ```text
 python -m radar.runner --production
 ```
 
-Any launcher arguments are passed through to `radar.runner`, so deployment validation can use `--preflight-only` and production delivery can use `--send-telegram-alerts` without creating separate runtime pipelines.
+Launcher arguments are passed through to `radar.runner`, so production delivery can add `--send-telegram-alerts` and validation can use `--preflight-only` without introducing a second runtime implementation.
 
-## Working-directory independence
-
-The launcher does not depend on the caller's current working directory. This is important for Windows Task Scheduler, which may start processes with an unexpected working directory.
-
-The launcher derives the project root from `%~dp0` and therefore finds the virtual environment and production config relative to the checkout itself.
-
-## Task registration
-
-Tracked registration helper:
+Each launcher execution writes stdout/stderr to:
 
 ```text
-scripts/register-radar-task.ps1
+runtime-logs\radar-YYYYMMDD-HHMMSS.log
 ```
 
-The script is safe to rerun: `Register-ScheduledTask -Force` updates the same task rather than creating duplicates.
+The launcher captures and returns the exact Radar exit code.
 
-Default task name:
+## Startup installer
 
-```text
-Stalar Procurement Radar
-```
-
-The registered action uses:
-
-```text
-Program/script: <absolute-local-project-path>\scripts\radar-production.cmd
-Arguments:      --send-telegram-alerts
-Start in:       <absolute-local-project-path>
-```
-
-The absolute path is resolved locally by the registration script; it is not hardcoded in repository content.
-
-Register/update from PowerShell:
+Install or refresh the current-user Startup entry with:
 
 ```powershell
-powershell -ExecutionPolicy Bypass -File scripts\register-radar-task.ps1
+powershell -NoProfile -ExecutionPolicy Bypass -File .\scripts\install-radar-startup.ps1
 ```
 
-## Schedule and concurrency
+The installer:
 
-The current registration contract uses:
+- resolves the project root from its own location;
+- creates/updates one shortcut in `[Environment]::GetFolderPath("Startup")`;
+- launches the system Windows PowerShell executable;
+- passes `-NoProfile -ExecutionPolicy Bypass -WindowStyle Hidden`;
+- starts `scripts\radar-background-loop.ps1`;
+- uses the repository root as the working directory;
+- is idempotent and does not create duplicate Startup entries;
+- requires neither elevation nor a Windows password.
 
-- repetition interval: every 3 hours;
-- `StartWhenAvailable` for missed starts;
-- `MultipleInstances IgnoreNew` to avoid overlapping Task Scheduler instances;
-- the existing Radar lock as an additional process-level concurrency guard.
+The shortcut contains no Telegram credentials or other secrets.
 
-The task runs under the current Windows user with `LogonType Interactive` and `RunLevel Limited`.
+## Background loop
 
-This is intentionally a workstation-oriented deployment. It assumes the selected user session/security context is available and can see the configured user environment variables. It is not a service-account or unattended-server deployment mode.
+The background loop starts immediately, invokes:
+
+```text
+scripts\radar-production.cmd --send-telegram-alerts
+```
+
+waits for that Radar run to finish, logs the launcher exit code, and then sleeps for the default three-hour interval (`10800` seconds). A non-zero Radar launcher exit does not terminate the recurring loop; the next scheduled cycle is still attempted.
+
+`-RunOnce` is supported for controlled validation:
+
+```powershell
+powershell -NoProfile -ExecutionPolicy Bypass -File .\scripts\radar-background-loop.ps1 -RunOnce
+```
+
+## Background-loop singleton
+
+The outer background loop has its own lock:
+
+```text
+runtime-logs\radar-background-loop.lock
+```
+
+This is separate from the inner recurring Radar lock at `outputs\radar\radar.lock`.
+
+Lock acquisition is atomic using exclusive file creation. Lock metadata includes:
+
+- PID;
+- process start time;
+- a unique owner token;
+- startup timestamp;
+- project root.
+
+A lock is treated as belonging to a live loop only when the PID exists and the recorded process start time matches that process. This protects against PID reuse.
+
+Dead, malformed, legacy, or mismatched-owner locks are recoverable. A genuinely live matching owner blocks a competing loop and causes the contender to exit with code `75`.
+
+Cleanup is owner-safe: a process removes the lock only when PID, process start time, and owner token still identify that process as the current owner.
 
 ## Telegram credentials
 
@@ -80,77 +114,101 @@ RADAR_TELEGRAM_CHAT_ID
 
 Do not place credentials in:
 
-- the tracked launcher;
+- tracked scripts;
 - `config/radar.production.yaml`;
-- Task Scheduler command-line arguments;
+- Startup shortcut arguments;
 - repository documentation or fixtures.
 
-The scheduled task passes only `--send-telegram-alerts`; credential values are read from the process environment by Radar.
+The background loop passes only `--send-telegram-alerts`; credential values are read by Radar from the Windows user environment.
 
-## Preflight before scheduling
+## Preflight
 
-Validate the launcher from the target Windows user context before relying on the schedule:
+Validate the production environment directly with:
+
+```powershell
+.\.venv\Scripts\python.exe -m radar.runner --production --preflight-only --verbose
+```
+
+Or validate through the launcher:
 
 ```powershell
 scripts\radar-production.cmd --preflight-only --verbose --send-telegram-alerts
 ```
 
-A successful preflight returns exit code `0`. Failure returns a non-zero code and sanitized diagnostics are written to `runtime-logs/`.
+A successful preflight returns exit code `0`. Preflight failure returns `78` and stops before normal recurring lifecycle execution.
 
-## Validated deployment result
+## Operational validation
 
-The Task Scheduler registration has been exercised with a manual `Start-ScheduledTask` run.
+The Startup-based deployment has been validated on the target Windows workstation with real runtime evidence.
 
-Observed deployment result:
+Confirmed sequence:
 
-- registration/update succeeded;
-- scheduled task state returned to `Ready`;
-- manual scheduled run completed with result code `0`;
-- Radar runtime log was produced under `runtime-logs/`;
-- no residual `outputs/radar/radar.lock` remained after completion;
-- the next three-hour trigger was scheduled normally.
+1. the Startup shortcut was present in the current-user Startup folder;
+2. manual shortcut execution started exactly one hidden background-loop process;
+3. the process acquired the hardened lock with PID/start-time/owner-token metadata;
+4. an existing legacy/stale loop lock was recovered automatically;
+5. Radar completed through the normal production launcher with exit code `0`;
+6. the background process remained alive after the completed Radar cycle, waiting for the next three-hour cycle;
+7. after an actual Windows reboot and login, the Startup shortcut launched the background loop automatically without manual intervention;
+8. the post-login process had a fresh PID, start time, and owner token;
+9. the reboot left the previous-session lock behind, and the new process recovered it as stale;
+10. the post-login Radar cycle completed with launcher exit code `0`.
 
-A parser warning about a malformed/partial EIS search card can appear in runtime logs without making the scheduled run fail. Such warnings should be monitored for frequency and impact rather than treated as deployment failure by themselves.
+This validates the workstation deployment contract:
 
-## Exit codes
+```text
+Windows login -> Startup -> background loop -> production launcher -> Radar -> wait for next cycle
+```
 
-The CMD launcher captures `%ERRORLEVEL%` immediately after Radar exits and returns that same value with `exit /b`.
+## Deprecated Task Scheduler path
 
-This preserves operational meanings already defined by Radar, including preflight failure exit code `78`, lock-related recurring codes, and success code `0`.
+The earlier `Stalar Procurement Radar` Task Scheduler deployment was retired after repeated interactive-session/control-interruption behavior. The registration helper has been removed from the repository.
 
-Task Scheduler therefore exposes the Radar/launcher result directly in `LastTaskResult`.
+Any pre-existing local Task Scheduler task should remain disabled or be removed so that only one production scheduling mechanism exists.
 
-## Runtime logs
+Do not reintroduce a password-backed, S4U, or interactive Task Scheduler path as a parallel production mechanism without a new explicit deployment decision and validation.
 
-Each launcher execution writes stdout and stderr to:
+## Runtime logs and artifacts
+
+Background-loop diagnostics are written to:
+
+```text
+runtime-logs\radar-background-loop.log
+```
+
+The current outer lock is:
+
+```text
+runtime-logs\radar-background-loop.lock
+```
+
+Normal Radar launcher logs remain:
 
 ```text
 runtime-logs\radar-YYYYMMDD-HHMMSS.log
 ```
 
-The directory is created locally when needed and is ignored by Git.
-
-Launcher and preflight failures remain visible in these logs. Runtime logging must not contain Telegram credentials or other secret values.
-
-## Runtime artifacts
-
 Runtime logs, generated reports, SQLite state, locks, downloaded procurement materials, live EIS HTML/protocol data, and browser state remain local and must not be committed.
-
-`RADAR_R3A1_LIVE_VALIDATION.md` remains narrowly ignored as a root-level historical live-validation runtime artifact rather than project documentation.
 
 ## Validation history
 
-R4F code-level launcher support was accepted with `181 passed`.
+Windows deployment evolved through several hardening steps. The accepted local test suite after the Startup/background-runner reliability work is `226 passed`.
 
-Subsequent operational hardening added:
+Behavioral coverage includes:
 
-- R4F.1 evidence-based state transition guardrails;
-- R4F.2 dead-PID orphan-lock recovery on Windows;
-- R4F.2.1 isolation of tests from host Telegram environment credentials;
-- R4F.3 detail-verification degradation semantics.
+- two concurrent loop processes, with exactly one owner and the other exiting `75`;
+- dead/orphan lock recovery;
+- malformed lock recovery;
+- PID-reuse/start-time mismatch recovery;
+- live matching owner rejection;
+- owner-safe cleanup;
+- `-RunOnce` cleanup;
+- continued loop behavior after a non-zero Radar launcher exit.
 
-The accepted suite at R4F.3 is `193 passed`, followed by successful live Telegram and Task Scheduler validation.
+The actual reboot/login validation complements these tests with workstation runtime evidence.
 
-## Boundary
+## Boundary and next hardening step
 
-The tracked registration helper configures the current workstation deployment only. Machine-specific task state, Windows credentials, Telegram secrets, Task Scheduler history, runtime logs, and generated Radar data remain external to Git.
+The deployment is validated for the current Windows workstation while the user is logged in. It is not intended to survive user logoff as a service.
+
+Remote CI still needs a Windows job that executes the Windows-specific launcher/PowerShell behavior. That CI work is a separate hardening step and does not change the current workstation runtime contract.
