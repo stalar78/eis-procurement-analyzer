@@ -2,9 +2,11 @@
 
 ## Purpose
 
-R4E adds a stable production-style entry point for recurring EIS Procurement Radar runs. The goal is to make the runtime predictable for Windows Task Scheduler or another external scheduler without embedding scheduling logic inside the application.
+R4E adds a stable production-style entry point for recurring EIS Procurement Radar runs. The goal is to make the runtime predictable for an external Windows launcher/background runner without embedding scheduling policy inside the Python application.
 
-Current milestone: `0.4.4-r4e-production-profile`.
+Current R4E milestone label: `0.4.4-r4e-production-profile`.
+
+The active workstation deployment now uses the current-user Windows Startup folder plus `scripts/radar-background-loop.ps1`; the earlier Task Scheduler path is deprecated and removed from the tracked deployment surface.
 
 ## Production entry point
 
@@ -33,7 +35,7 @@ outputs/radar
 data/radar.db
 ```
 
-In production/preflight mode these paths are normalized against the project root. This prevents an external scheduler launched from a directory such as `C:\Windows\System32` from accidentally creating Radar state relative to that directory.
+In production/preflight mode these paths are normalized against the project root. This prevents any external Windows launcher started from an unrelated directory from accidentally creating Radar state relative to that directory.
 
 No machine-specific absolute paths should be committed to the production profile.
 
@@ -70,7 +72,7 @@ RADAR_TELEGRAM_CHAT_ID
 
 Real token/chat values must remain outside Git.
 
-Telegram delivery is disabled by default in the tracked production profile. If it is enabled, preflight fails when required credentials are unavailable.
+Telegram delivery is disabled by default in the tracked production profile. The workstation background runner enables it at execution time with `--send-telegram-alerts`; preflight then requires the configured environment credentials to be available to that user session.
 
 ## Working-directory independence
 
@@ -84,19 +86,42 @@ Normal non-production CLI path semantics remain unchanged.
 
 Preflight occurs before recurring execution. Therefore an invalid production environment fails fast and does not start discovery or create a normal recurring `STARTED` lifecycle run.
 
-After successful preflight, existing R4B-R4D guarantees remain in effect:
+After successful preflight, existing recurring guarantees remain in effect:
 
-- overlapping recurring runs are locked out;
-- stale locks can be recovered;
+- overlapping Radar runs are locked out;
+- stale Radar run locks can be recovered;
 - failed runs do not replace the last successful published result;
 - alert filtering remains deterministic;
 - Telegram delivery remains optional and independently retryable.
 
+The outer Windows background loop has a separate singleton lock and does not replace the inner Radar run lock.
+
+## Windows production wrapper
+
+The tracked CMD launcher is:
+
+```text
+scripts\radar-production.cmd
+```
+
+It resolves the project root from its own location, explicitly uses the repository `.venv`, writes timestamped logs to `runtime-logs/`, passes CLI arguments through to the runner, and preserves the exact Radar exit code.
+
+The current recurrence mechanism is implemented outside the Python runtime by:
+
+```text
+scripts\radar-background-loop.ps1
+scripts\install-radar-startup.ps1
+```
+
+The Startup installer creates/updates one passwordless current-user Startup shortcut. The background loop invokes the normal production launcher, waits for completion, and repeats on a three-hour interval while the user session exists.
+
+See [Windows deployment](RADAR_WINDOWS_DEPLOYMENT.md) for the validated deployment contract and operational evidence.
+
 ## Validation
 
-R4E was accepted with `176 passed`.
+R4E itself was accepted with `176 passed`.
 
-Tests cover:
+Tests at that milestone covered:
 
 - valid production preflight;
 - missing Telegram environment values when delivery is enabled;
@@ -107,8 +132,10 @@ Tests cover:
 - fail-fast `--preflight-only` behavior;
 - working-directory-independent production config/runtime path resolution.
 
+Subsequent operational hardening reached an accepted local suite of `226 passed` and added stricter detail evidence, TLS verification, and behavioral Windows background-runner coverage without changing the core R4E production entry point.
+
 ## Scope boundary
 
-R4E does not create or register a Windows Task Scheduler task. It provides the stable runtime contract that such a task can invoke.
+R4E defines the stable Python production contract; it does not itself decide how Windows starts recurring executions.
 
-The next deployment step can therefore focus only on Task Scheduler registration, environment setup, schedule choice, and first controlled scheduled execution without changing Radar business logic.
+The current supported workstation recurrence layer is the Startup/background-loop deployment. Task Scheduler is no longer the tracked production mechanism.
