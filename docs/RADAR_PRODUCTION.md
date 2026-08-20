@@ -61,6 +61,32 @@ Checks currently cover:
 
 A preflight failure returns exit code `78`.
 
+## Runtime health
+
+R4G.6 adds a lightweight read-only operational health check on top of the existing `recurring_run_lifecycle` state. It does not create a second health database and does not run EIS discovery, Telegram delivery, or a recurring cycle.
+
+Use the production profile with:
+
+```powershell
+.\.venv\Scripts\python.exe -m radar.runner --production --health
+```
+
+The default freshness threshold is `7.0` hours. It can be overridden for diagnostics:
+
+```powershell
+.\.venv\Scripts\python.exe -m radar.runner --production --health --health-max-age-hours 10
+```
+
+The command reports the latest lifecycle status, the last successful recurring run timestamp, its age, and one of three classifications:
+
+- `HEALTHY` — a successful recurring run exists and is within the freshness threshold; exit code `0`;
+- `STALE` — a successful recurring run exists but is older than the threshold; exit code `2`;
+- `UNHEALTHY` — no successful recurring run exists, lifecycle data is unavailable/invalid, or the latest lifecycle state is `FAILED` / `SKIPPED_LOCKED`; exit code `3`.
+
+A current failure is intentionally not hidden by an earlier fresh success. For example, if the latest lifecycle row is `FAILED` while a success from one hour ago still exists, the health result is `UNHEALTHY`.
+
+The health database is opened read-only. The command is intended for operator checks and future watchdog integration without mutating runtime state.
+
 ## Telegram credentials
 
 The production profile stores environment-variable names only:
@@ -79,6 +105,8 @@ Telegram delivery is disabled by default in the tracked production profile. The 
 R4E explicitly guarantees that the default production config and project-relative production DB/output paths do not depend on the caller's current working directory.
 
 This behavior is covered by an offline regression test that changes the process CWD to an unrelated temporary directory, runs the normal production preflight entry point, and verifies that the production config and runtime directories resolve to the project base instead of the unrelated CWD.
+
+R4G.6 also covers health-path resolution outside the project CWD so the read-only health check does not accidentally create or inspect a database relative to an unrelated caller directory.
 
 Normal non-production CLI path semantics remain unchanged.
 
@@ -132,10 +160,12 @@ Tests at that milestone covered:
 - fail-fast `--preflight-only` behavior;
 - working-directory-independent production config/runtime path resolution.
 
-Subsequent operational hardening reached an accepted local suite of `226 passed` and added stricter detail evidence, TLS verification, and behavioral Windows background-runner coverage without changing the core R4E production entry point.
+Subsequent operational hardening has reached an accepted local suite of `231 passed` and added stricter detail evidence, TLS verification, behavioral Windows background-runner coverage, cross-platform CI coverage, pinned direct dependencies, and read-only runtime health evaluation without changing the core R4E production entry point.
 
 ## Scope boundary
 
 R4E defines the stable Python production contract; it does not itself decide how Windows starts recurring executions.
 
 The current supported workstation recurrence layer is the Startup/background-loop deployment. Task Scheduler is no longer the tracked production mechanism.
+
+The R4G.6 health command remains intentionally local and read-only. It does not add an external monitoring service, notification channel, dashboard, or Windows service.
