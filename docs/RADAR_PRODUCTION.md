@@ -6,6 +6,8 @@ R4E adds a stable production-style entry point for recurring EIS Procurement Rad
 
 Current R4E milestone label: `0.4.4-r4e-production-profile`.
 
+Current Radar application version: `0.5.0-r4g6-health-hardening`.
+
 The active workstation deployment now uses the current-user Windows Startup folder plus `scripts/radar-background-loop.ps1`; the earlier Task Scheduler path is deprecated and removed from the tracked deployment surface.
 
 ## Production entry point
@@ -71,21 +73,44 @@ Use the production profile with:
 .\.venv\Scripts\python.exe -m radar.runner --production --health
 ```
 
-The default freshness threshold is `7.0` hours. It can be overridden for diagnostics:
+The default last-success freshness threshold is `7.0` hours. R4G.6.1 adds a separate maximum duration for the current `STARTED` run, default `12.0` hours.
+
+Both thresholds can be overridden for diagnostics:
 
 ```powershell
-.\.venv\Scripts\python.exe -m radar.runner --production --health --health-max-age-hours 10
+.\.venv\Scripts\python.exe -m radar.runner --production --health --health-max-age-hours 10 --health-max-run-hours 12
 ```
+
+Both values must be finite and greater than zero. Zero, negative values, NaN, and infinities are rejected and return the health `UNHEALTHY` exit code.
 
 The command reports the latest lifecycle status, the last successful recurring run timestamp, its age, and one of three classifications:
 
-- `HEALTHY` — a successful recurring run exists and is within the freshness threshold; exit code `0`;
-- `STALE` — a successful recurring run exists but is older than the threshold; exit code `2`;
-- `UNHEALTHY` — no successful recurring run exists, lifecycle data is unavailable/invalid, or the latest lifecycle state is `FAILED` / `SKIPPED_LOCKED`; exit code `3`.
+- `HEALTHY` — a successful recurring run exists and is within the freshness threshold, and any current `STARTED` run is still within its maximum run duration; exit code `0`;
+- `STALE` — a successful recurring run exists but is older than the freshness threshold while no stronger unhealthy condition is present; exit code `2`;
+- `UNHEALTHY` — no successful recurring run exists, lifecycle data is unavailable/invalid, the latest lifecycle state is `FAILED` / `SKIPPED_LOCKED`, an unknown state is observed, or a current `STARTED` run is malformed or exceeds the maximum run duration; exit code `3`.
 
-A current failure is intentionally not hidden by an earlier fresh success. For example, if the latest lifecycle row is `FAILED` while a success from one hour ago still exists, the health result is `UNHEALTHY`.
+A current failure is intentionally not hidden by an earlier fresh success. Likewise, a `STARTED` row that has exceeded the maximum execution duration is `UNHEALTHY` even when a recent successful run exists.
 
-The health database is opened read-only. The command is intended for operator checks and future watchdog integration without mutating runtime state.
+The health database is opened read-only. The command remains an operator-facing local check, not an independent watchdog or notification service.
+
+## Runtime provenance
+
+R4G.6.2 adds a simple runtime build identity without introducing a packaging/release subsystem.
+
+Use:
+
+```powershell
+.\.venv\Scripts\python.exe -m radar.runner --version
+```
+
+The command prints:
+
+- the Radar application version;
+- a cached short Git `HEAD` build identity when the checkout metadata is available.
+
+If Git is unavailable, times out, or no SHA can be resolved, build identity is reported as `unknown`. This condition never blocks ordinary Radar execution.
+
+Generated report summaries preserve the existing `radar_version` field and also include `build_identity`, so stored output can be associated with a concrete code revision when Git metadata is available.
 
 ## Telegram credentials
 
@@ -160,7 +185,7 @@ Tests at that milestone covered:
 - fail-fast `--preflight-only` behavior;
 - working-directory-independent production config/runtime path resolution.
 
-Subsequent operational hardening has reached an accepted local suite of `231 passed` and added stricter detail evidence, TLS verification, behavioral Windows background-runner coverage, cross-platform CI coverage, pinned direct dependencies, and read-only runtime health evaluation without changing the core R4E production entry point.
+Subsequent operational hardening has reached an accepted local suite of `245 passed` and added stricter detail evidence, TLS verification, behavioral Windows background-runner coverage, cross-platform CI coverage, pinned direct dependencies, hardened read-only runtime health evaluation, and runtime build provenance without changing the core R4E production entry point.
 
 ## Scope boundary
 
@@ -168,4 +193,4 @@ R4E defines the stable Python production contract; it does not itself decide how
 
 The current supported workstation recurrence layer is the Startup/background-loop deployment. Task Scheduler is no longer the tracked production mechanism.
 
-The R4G.6 health command remains intentionally local and read-only. It does not add an external monitoring service, notification channel, dashboard, or Windows service.
+The health command remains intentionally local and read-only. It does not add an external monitoring service, notification channel, dashboard, or Windows service.
