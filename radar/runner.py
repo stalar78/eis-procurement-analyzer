@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import argparse
+import math
 import sqlite3
 import sys
 from datetime import datetime
@@ -35,6 +36,8 @@ HEALTHY_EXIT_CODE = 0
 STALE_HEALTH_EXIT_CODE = 2
 UNHEALTHY_EXIT_CODE = 3
 DEFAULT_HEALTH_MAX_AGE_HOURS = 7.0
+DEFAULT_HEALTH_MAX_RUN_HOURS = 12.0
+KNOWN_LIFECYCLE_STATUSES = {"STARTED", "SUCCESS", "FAILED", "SKIPPED_LOCKED"}
 UNHEALTHY_LATEST_STATUSES = {"FAILED", "SKIPPED_LOCKED"}
 
 
@@ -128,6 +131,7 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
     parser.add_argument("--telegram-chat-id")
     parser.add_argument("--health", action="store_true")
     parser.add_argument("--health-max-age-hours", type=float, default=DEFAULT_HEALTH_MAX_AGE_HOURS)
+    parser.add_argument("--health-max-run-hours", type=float, default=DEFAULT_HEALTH_MAX_RUN_HOURS)
     return parser.parse_args(argv)
 
 
@@ -154,7 +158,17 @@ def _row_to_dict(row: sqlite3.Row | None) -> dict[str, str]:
     return dict(row) if row is not None else {}
 
 
-def evaluate_health(database: str, *, now: datetime, max_age_hours: float) -> dict[str, object]:
+def _age_hours(now: datetime, earlier: datetime) -> float:
+    if earlier.tzinfo is None and now.tzinfo is not None:
+        earlier = earlier.replace(tzinfo=now.tzinfo)
+    return max(0.0, (now - earlier).total_seconds() / 3600)
+
+
+def _valid_positive_finite(value: float) -> bool:
+    return math.isfinite(value) and value > 0
+
+
+def evaluate_health(database: str, *, now: datetime, max_age_hours: float, max_run_hours: float) -> dict[str, object]:
     connection = _open_lifecycle_readonly(database)
     if connection is None:
         return {
@@ -163,6 +177,7 @@ def evaluate_health(database: str, *, now: datetime, max_age_hours: float) -> di
             "latest": {},
             "last_success": {},
             "last_success_age_hours": None,
+            "latest_started_age_hours": None,
         }
     try:
         latest = connection.execute("SELECT * FROM recurring_run_lifecycle ORDER BY id DESC LIMIT 1").fetchone()
@@ -174,6 +189,7 @@ def evaluate_health(database: str, *, now: datetime, max_age_hours: float) -> di
             "latest": {},
             "last_success": {},
             "last_success_age_hours": None,
+            "latest_started_age_hours": None,
         }
     finally:
         connection.close()
@@ -185,9 +201,20 @@ def evaluate_health(database: str, *, now: datetime, max_age_hours: float) -> di
             "latest": _row_to_dict(latest),
             "last_success": {},
             "last_success_age_hours": None,
+            "latest_started_age_hours": None,
         }
 
     latest_status = str(latest["status"] if latest else "")
+    if latest_status not in KNOWN_LIFECYCLE_STATUSES:
+        return {
+            "health_status": "UNHEALTHY",
+            "reason": f"unknown latest lifecycle status: {latest_status or 'NONE'}",
+            "latest": _row_to_dict(latest),
+            "last_success": _row_to_dict(last_success),
+            "last_success_age_hours": None,
+            "latest_started_age_hours": None,
+        }
+
     success_time = _parse_lifecycle_time(last_success["finished_at"] or last_success["started_at"])
     if success_time is None:
         return {
@@ -196,15 +223,31 @@ def evaluate_health(database: str, *, now: datetime, max_age_hours: float) -> di
             "latest": _row_to_dict(latest),
             "last_success": _row_to_dict(last_success),
             "last_success_age_hours": None,
+            "latest_started_age_hours": None,
         }
-    if success_time.tzinfo is None and now.tzinfo is not None:
-        success_time = success_time.replace(tzinfo=now.tzinfo)
-    age_hours = max(0.0, (now - success_time).total_seconds() / 3600)
+    success_age_hours = _age_hours(now, success_time)
 
-    if latest_status in UNHEALTHY_LATEST_STATUSES:
+    latest_started_age_hours = None
+    if latest_status == "STARTED":
+        started_time = _parse_lifecycle_time(latest["started_at"])
+        if started_time is None:
+            health_status = "UNHEALTHY"
+            reason = "latest STARTED timestamp is invalid"
+        else:
+            latest_started_age_hours = _age_hours(now, started_time)
+            if latest_started_age_hours > max_run_hours:
+                health_status = "UNHEALTHY"
+                reason = "latest STARTED run exceeded max run duration"
+            elif success_age_hours > max_age_hours:
+                health_status = "STALE"
+                reason = "last successful recurring run is stale"
+            else:
+                health_status = "HEALTHY"
+                reason = "last successful recurring run is fresh"
+    elif latest_status in UNHEALTHY_LATEST_STATUSES:
         health_status = "UNHEALTHY"
         reason = f"latest lifecycle status is {latest_status}"
-    elif age_hours > max_age_hours:
+    elif success_age_hours > max_age_hours:
         health_status = "STALE"
         reason = "last successful recurring run is stale"
     else:
@@ -215,11 +258,12 @@ def evaluate_health(database: str, *, now: datetime, max_age_hours: float) -> di
         "reason": reason,
         "latest": _row_to_dict(latest),
         "last_success": _row_to_dict(last_success),
-        "last_success_age_hours": round(age_hours, 2),
+        "last_success_age_hours": round(success_age_hours, 2),
+        "latest_started_age_hours": round(latest_started_age_hours, 2) if latest_started_age_hours is not None else None,
     }
 
 
-def print_health_report(report: dict[str, object], *, max_age_hours: float) -> None:
+def print_health_report(report: dict[str, object], *, max_age_hours: float, max_run_hours: float) -> None:
     latest = report.get("latest") or {}
     last_success = report.get("last_success") or {}
     latest_status = latest.get("status", "NONE") if isinstance(latest, dict) else "NONE"
@@ -232,6 +276,9 @@ def print_health_report(report: dict[str, object], *, max_age_hours: float) -> N
     print(f"Radar health: {report['health_status']}")
     print(f"Latest lifecycle: {latest_status} {latest_run_id}".rstrip())
     print(f"Last success: {success_at or 'NONE'} age={age_text} max_age_hours={max_age_hours}")
+    started_age = report.get("latest_started_age_hours")
+    if started_age is not None:
+        print(f"Latest STARTED age: {started_age}h max_run_hours={max_run_hours}")
     print(f"Reason: {report['reason']}")
 
 
@@ -269,9 +316,24 @@ def run(argv: list[str] | None = None) -> int:
     if args.health:
         if args.production:
             normalize_runtime_paths(config, PROJECT_ROOT)
+        if not _valid_positive_finite(args.health_max_age_hours):
+            print("Health check failed: --health-max-age-hours must be a finite value > 0")
+            return UNHEALTHY_EXIT_CODE
+        if not _valid_positive_finite(args.health_max_run_hours):
+            print("Health check failed: --health-max-run-hours must be a finite value > 0")
+            return UNHEALTHY_EXIT_CODE
         now = datetime.now().astimezone()
-        report = evaluate_health(config.radar.database, now=now, max_age_hours=args.health_max_age_hours)
-        print_health_report(report, max_age_hours=args.health_max_age_hours)
+        report = evaluate_health(
+            config.radar.database,
+            now=now,
+            max_age_hours=args.health_max_age_hours,
+            max_run_hours=args.health_max_run_hours,
+        )
+        print_health_report(
+            report,
+            max_age_hours=args.health_max_age_hours,
+            max_run_hours=args.health_max_run_hours,
+        )
         if report["health_status"] == "HEALTHY":
             return HEALTHY_EXIT_CODE
         if report["health_status"] == "STALE":
