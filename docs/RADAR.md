@@ -2,21 +2,22 @@
 
 ## Purpose
 
-EIS Procurement Radar is the stateful decision-support layer of EIS Procurement Analyzer. It turns live EIS search results into a bounded, explainable pipeline for identifying procurements worth manual review, tracking meaningful changes across recurring runs, surfacing a compact alert feed, optionally delivering that feed to Telegram, and running through a stable Windows production launcher and Task Scheduler deployment.
+EIS Procurement Radar is the stateful decision-support layer of EIS Procurement Analyzer. It turns live EIS search results into a bounded, explainable pipeline for identifying procurements worth manual review, tracking meaningful changes across recurring runs, surfacing a compact alert feed, optionally delivering that feed to Telegram, and running through a stable Windows production launcher plus a passwordless current-user Startup background runner.
 
-Current Radar version: `0.4.8-r4f3-detail-verification-degradation`.
+Current Radar version label: `0.4.8-r4f3-detail-verification-degradation`.
 
 The Radar is intentionally conservative. It does not submit applications or replace legal/commercial review.
 
 ## End-to-end flow
 
 ```text
-Windows production launcher / production preflight / Task Scheduler
-    -> recurring orchestration / lock
+Windows login / Startup shortcut / background loop
+    -> Windows production launcher / production preflight
+    -> recurring orchestration / radar.lock
     -> active EIS discovery
     -> deduplication and state
     -> provisional eligibility/scoring
-    -> detail-page open verification with degradation policy
+    -> detail-page evidence verification
     -> historical analog search
     -> historical result/protocol extraction
     -> competition metrics + confidence
@@ -48,13 +49,29 @@ Opportunity state follows the same rule. `OPPORTUNITY_NO_LONGER_ACTIVE` is emitt
 
 R4B adds atomic `radar.lock` acquisition, stale-lock recovery, lifecycle statuses `STARTED`, `SUCCESS`, `FAILED`, and `SKIPPED_LOCKED`, failure isolation, and bounded retention.
 
-R4F.2 strengthens Windows recovery for interrupted runs. When an existing lock contains a PID that is provably no longer alive, Radar can recover the orphan lock immediately instead of waiting for the age timeout. Live PIDs remain protected, and missing/malformed/indeterminate PID cases keep the conservative age-based fallback.
+R4F.2 strengthens Windows recovery for interrupted runs. When an existing Radar run lock contains a PID that is provably no longer alive, Radar can recover the orphan lock immediately instead of waiting for the age timeout. Live PIDs remain protected, and missing/malformed/indeterminate PID cases keep the conservative age-based fallback.
 
-### Live detail verification
+### Detail evidence verification
 
-R4F.3 separates unavailable verification from negative verification evidence. A provisionally-open candidate is kept when detail verification returns `DETAIL_UNAVAILABLE` or when the candidate lies beyond the configured verification limit. `VERIFIED_CLOSED`, `VERIFIED_CANCELLED`, `STATUS_CONFLICT`, and `DEADLINE_CONFLICT` remain rejecting outcomes.
+The current detail-verification contract is stricter than the original R4F.3 degradation rule.
 
-This prevents temporary detail-page/network unavailability from erasing otherwise valid active-search evidence without falsely converting unavailability into `VERIFIED_OPEN`.
+A provisionally-open card can become `VERIFIED_OPEN` only when the fetched detail content provides all three required evidence elements:
+
+- the expected procurement identity;
+- an explicit active/open detail status;
+- an explicit future application deadline.
+
+The search-card status/deadline are no longer fallback evidence for missing detail fields. They may still be retained for comparison and conflict detection.
+
+Incomplete, generic, malformed, wrong-procurement, or otherwise inconclusive detail content becomes `DETAIL_UNAVAILABLE` rather than self-confirming the original card. Explicit closed/cancelled detail evidence still produces `VERIFIED_CLOSED` / `VERIFIED_CANCELLED`; explicit conflicts remain conservative rejecting outcomes.
+
+This preserves the R4F.3 degradation principle without weakening the meaning of `VERIFIED`.
+
+### TLS source integrity
+
+Production Radar HTTP retrieval uses normal `requests` certificate verification. Production EIS paths do not use `verify=False` and do not suppress insecure-request warnings.
+
+TLS certificate failures cannot become valid evidence. Detail verification degrades to `DETAIL_UNAVAILABLE`; source resolution remains temporarily unavailable. The system does not retry by disabling certificate validation.
 
 ### Alert filtering
 
@@ -76,22 +93,30 @@ R4E adds `--production`, `config/radar.production.yaml`, stable project-root pat
 
 ### Windows deployment support
 
-R4F adds `scripts/radar-production.cmd`. The current repository also includes `scripts/register-radar-task.ps1` for idempotent registration/update of the local scheduled task.
+The active workstation deployment uses:
 
-The launcher:
+```text
+scripts/radar-production.cmd
+scripts/radar-background-loop.ps1
+scripts/install-radar-startup.ps1
+```
+
+The CMD launcher:
 
 - derives the project root from its own location rather than the current working directory;
 - explicitly uses the project's `.venv\Scripts\python.exe`;
 - invokes the existing `radar.runner --production` path rather than implementing another runtime pipeline;
-- supports normal production execution and CLI passthrough such as `--preflight-only` or `--send-telegram-alerts`;
+- supports CLI passthrough such as `--preflight-only` or `--send-telegram-alerts`;
 - redirects stdout/stderr to timestamped files under `runtime-logs/`;
 - preserves the exact Radar process exit code.
 
-The registration script creates/updates `Stalar Procurement Radar`, schedules it every three hours, uses the repository root as the working directory, passes only `--send-telegram-alerts`, and configures Task Scheduler to ignore overlapping starts while Radar's own lock remains the second line of protection.
+The Startup installer creates/updates one current-user `.lnk` entry. It requires neither administrator rights nor a Windows password. The shortcut launches `radar-background-loop.ps1` hidden. The loop invokes `radar-production.cmd --send-telegram-alerts`, waits for the run to finish, then sleeps for three hours.
 
-The current task registration uses the current Windows user with interactive logon semantics and has been manually validated through Task Scheduler with result code `0` and no residual `radar.lock`.
+The background-loop singleton is separate from the inner Radar run lock. It uses atomic `CreateNew` acquisition and records PID, process start time, and a unique owner token. Dead, malformed, legacy, and PID-reused locks can be recovered; a live matching owner blocks a second runner with exit code `75`; cleanup removes only a lock still owned by the current process.
 
-## Windows launcher examples
+The previous Task Scheduler deployment is deprecated. Its registration helper has been removed from the repository and the old workstation task should remain disabled/removed.
+
+## Windows launcher and Startup examples
 
 Preflight:
 
@@ -99,16 +124,22 @@ Preflight:
 scripts\radar-production.cmd --preflight-only --verbose --send-telegram-alerts
 ```
 
-Production run:
+One direct production run:
 
 ```powershell
 scripts\radar-production.cmd --send-telegram-alerts
 ```
 
-Register/update the scheduled task:
+Install/update current-user Startup entry:
 
 ```powershell
-powershell -ExecutionPolicy Bypass -File scripts\register-radar-task.ps1
+powershell -NoProfile -ExecutionPolicy Bypass -File .\scripts\install-radar-startup.ps1
+```
+
+Manual one-cycle background validation:
+
+```powershell
+powershell -NoProfile -ExecutionPolicy Bypass -File .\scripts\radar-background-loop.ps1 -RunOnce
 ```
 
 ## Configuration and secrets
@@ -122,13 +153,15 @@ RADAR_TELEGRAM_BOT_TOKEN
 RADAR_TELEGRAM_CHAT_ID
 ```
 
-The launcher and scheduler registration do not pass credential values on the command line. Real credentials must remain outside Git.
+The launcher, background loop, and Startup shortcut do not contain credential values. Real credentials must remain outside Git.
 
 ## Runtime data
 
 `runtime-logs/` is local runtime output and is ignored by Git. `RADAR_R3A1_LIVE_VALIDATION.md` is also ignored narrowly because `radar.historical_live_validation` creates it as a root-level runtime validation artifact. The ignore rule does not cover general Markdown documentation.
 
 ## Validation status
+
+Milestone history:
 
 - R4A: `151 passed`
 - R4B: `156 passed`
@@ -137,19 +170,19 @@ The launcher and scheduler registration do not pass credential values on the com
 - R4E: `176 passed`
 - R4F: `181 passed`
 - R4F.1: `183 passed`
-- R4F.2 / R4F.2.1 / R4F.3 accepted suite: `193 passed`
+- R4F.2 / R4F.2.1 / R4F.3: `193 passed`
+- detail-evidence hardening: `215 passed`
+- TLS integrity hardening: `219 passed`
+- background-runner hardening: `226 passed`
 
-R4F.3 validation covers, among other cases:
+Operational validation additionally demonstrated:
 
-- absence-only procurement/opportunity observations do not become closure/inactivity evidence;
-- explicit closure/inactivity evidence still produces the supported transitions;
-- Windows dead-PID locks are recoverable while live-PID locks remain protected;
-- host Telegram environment credentials are isolated from tests;
-- `DETAIL_UNAVAILABLE` preserves a provisionally-open candidate;
-- `VERIFIED_OPEN` preserves a candidate;
-- verified closed/cancelled candidates are removed;
-- candidates beyond the detail-verification limit are not dropped;
-- diagnostics preserve unavailable/skipped/rejected verification information.
+- stale/legacy background-loop lock recovery in a real workstation runtime;
+- successful direct background cycle with launcher exit code `0`;
+- persistent loop remaining alive after a completed Radar cycle;
+- actual Windows reboot/login automatically starting the Startup shortcut;
+- a new post-login background owner with fresh PID/start-time/token metadata;
+- automatic post-login Radar execution completing with launcher exit code `0`.
 
 ## Safety and repository hygiene
 
