@@ -2,6 +2,8 @@ from datetime import datetime
 from urllib.parse import parse_qs, urlparse
 from zoneinfo import ZoneInfo
 
+import pytest
+
 from radar.config import RadarConfig
 from radar.discovery import discover_cards
 from radar.models import NormalizedStatus
@@ -22,6 +24,35 @@ from radar.discovery import normalize_card
 
 
 BASE = "https://zakupki.gov.ru/epz/order/extendedsearch/results.html"
+PROCUREMENT_NUMBER = "01234567890123456789"
+OTHER_PROCUREMENT_NUMBER = "98765432109876543210"
+ACTIVE_DETAIL_STATUS = "Подача заявок"
+ACTIVE_DETAIL_DEADLINE = "20.08.2026 10:00"
+COMPLETED_DETAIL_STATUS = "Определение поставщика завершено"
+CANCELLED_DETAIL_STATUS = "Закупка отменена"
+
+
+def _as_of() -> datetime:
+    return datetime(2026, 8, 4, tzinfo=ZoneInfo("Europe/Moscow"))
+
+
+def _verification_card():
+    return normalize_card(
+        {
+            "procurement_number": PROCUREMENT_NUMBER,
+            "status_raw": ACTIVE_DETAIL_STATUS,
+            "application_deadline": "20.08.2026",
+        }
+    )
+
+
+def _detail(*, number: str = PROCUREMENT_NUMBER, status: str = ACTIVE_DETAIL_STATUS, deadline: str = ACTIVE_DETAIL_DEADLINE) -> str:
+    parts = [f"Номер закупки: {number}"]
+    if status:
+        parts.append(f"Статус: {status}")
+    if deadline:
+        parts.append(f"Дата и время окончания срока подачи заявок: {deadline}")
+    return "\n".join(parts)
 
 
 def test_active_only_search_request_includes_active_parameters() -> None:
@@ -89,24 +120,75 @@ def test_active_status_with_future_deadline_open() -> None:
     assert ok
 
 
-def test_detail_page_verifies_open_procurement() -> None:
-    card = normalize_card({"procurement_number": "1", "status_raw": "Подача заявок", "application_deadline": "20.08.2026"})
-    detail = "Статус: Подача заявок\nДата и время окончания срока подачи заявок: 20.08.2026 10:00"
-    result = verify_open_from_detail_text(card, detail, datetime(2026, 8, 4, tzinfo=ZoneInfo("Europe/Moscow")))
+@pytest.mark.parametrize(
+    ("detail", "expected_status"),
+    [
+        ("", "DETAIL_UNAVAILABLE"),
+        ("<html><body>HTTP 200 OK</body></html>", "DETAIL_UNAVAILABLE"),
+        (_detail(status=""), "DETAIL_UNAVAILABLE"),
+        (_detail(deadline=""), "DETAIL_UNAVAILABLE"),
+        (_detail(deadline="", status=ACTIVE_DETAIL_STATUS), "DETAIL_UNAVAILABLE"),
+        (_detail(status="", deadline=ACTIVE_DETAIL_DEADLINE), "DETAIL_UNAVAILABLE"),
+        (_detail(number=OTHER_PROCUREMENT_NUMBER), "DETAIL_UNAVAILABLE"),
+        ("<html><body><div>" + PROCUREMENT_NUMBER + "<span>broken", "DETAIL_UNAVAILABLE"),
+        (_detail(status="Неизвестный статус"), "STATUS_CONFLICT"),
+    ],
+)
+def test_incomplete_detail_evidence_does_not_verify_open(detail: str, expected_status: str) -> None:
+    result = verify_open_from_detail_text(_verification_card(), detail, _as_of())
+
+    assert result.open_verification_status == expected_status
+    assert result.open_verification_status != "VERIFIED_OPEN"
+
+
+def test_valid_detail_page_verifies_open_procurement() -> None:
+    result = verify_open_from_detail_text(_verification_card(), _detail(), _as_of())
+
     assert result.open_verification_status == "VERIFIED_OPEN"
 
 
+def test_exact_procurement_number_identity_verifies_open_procurement() -> None:
+    result = verify_open_from_detail_text(_verification_card(), _detail(number=PROCUREMENT_NUMBER), _as_of())
+
+    assert result.open_verification_status == "VERIFIED_OPEN"
+
+
+def test_different_procurement_number_identity_does_not_verify_open_procurement() -> None:
+    result = verify_open_from_detail_text(_verification_card(), _detail(number=OTHER_PROCUREMENT_NUMBER), _as_of())
+
+    assert result.open_verification_status == "DETAIL_UNAVAILABLE"
+
+
+def test_unrelated_numeric_fields_are_not_concatenated_into_procurement_identity() -> None:
+    detail = "\n".join(
+        [
+            "Номер позиции: 0123456789",
+            "Номер редакции: 0123456789",
+            f"Статус: {ACTIVE_DETAIL_STATUS}",
+            f"Дата и время окончания срока подачи заявок: {ACTIVE_DETAIL_DEADLINE}",
+        ]
+    )
+    result = verify_open_from_detail_text(_verification_card(), detail, _as_of())
+
+    assert result.open_verification_status == "DETAIL_UNAVAILABLE"
+
+
 def test_detail_deadline_conflict_blocks() -> None:
-    card = normalize_card({"procurement_number": "1", "status_raw": "Подача заявок", "application_deadline": "20.08.2026"})
-    detail = "Статус: Подача заявок\nДата и время окончания срока подачи заявок: 19.08.2026 10:00"
-    result = verify_open_from_detail_text(card, detail, datetime(2026, 8, 4, tzinfo=ZoneInfo("Europe/Moscow")))
+    result = verify_open_from_detail_text(_verification_card(), _detail(deadline="19.08.2026 10:00"), _as_of())
+
     assert result.open_verification_status == "DEADLINE_CONFLICT"
 
 
-def test_cancelled_detail_blocks() -> None:
-    card = normalize_card({"procurement_number": "1", "status_raw": "Подача заявок", "application_deadline": "20.08.2026"})
-    result = verify_open_from_detail_text(card, "Статус: Закупка отменена", datetime(2026, 8, 4, tzinfo=ZoneInfo("Europe/Moscow")))
+def test_valid_cancelled_detail_blocks() -> None:
+    result = verify_open_from_detail_text(_verification_card(), _detail(status=CANCELLED_DETAIL_STATUS, deadline=""), _as_of())
+
     assert result.open_verification_status == "VERIFIED_CANCELLED"
+
+
+def test_valid_closed_detail_blocks() -> None:
+    result = verify_open_from_detail_text(_verification_card(), _detail(status=COMPLETED_DETAIL_STATUS, deadline=""), _as_of())
+
+    assert result.open_verification_status == "VERIFIED_CLOSED"
 
 
 def test_status_audit_aggregates_raw_labels() -> None:

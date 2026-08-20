@@ -70,9 +70,35 @@ def is_provisionally_open(card: RadarCard, as_of: datetime) -> tuple[bool, list[
     return True, reasons, info
 
 
-def extract_status_from_detail_text(text: str) -> str:
+def _plain_detail_text(text: str) -> str:
     text = html.unescape(re.sub(r"<[^>]+>", " ", text or ""))
-    text = re.sub(r"\s+", " ", text)
+    return re.sub(r"\s+", " ", text).strip()
+
+
+def _contains_expected_procurement_number(text: str, procurement_number: str) -> bool:
+    plain = _plain_detail_text(text)
+    expected = (procurement_number or "").strip()
+    if not expected:
+        return False
+    if expected in plain:
+        return True
+    expected_digits = re.sub(r"\D+", "", expected)
+    if not expected_digits:
+        return False
+    if expected == expected_digits:
+        return False
+    digit_count = len(expected_digits)
+    for match in re.finditer(r"\d(?:[\d\s\-/№#]+?\d)?", plain):
+        candidate = match.group(0)
+        if len(re.sub(r"\D+", "", candidate)) != digit_count:
+            continue
+        if expected_digits == re.sub(r"\D+", "", candidate):
+            return True
+    return False
+
+
+def extract_status_from_detail_text(text: str) -> str:
+    text = _plain_detail_text(text)
     patterns = [
         r"Статус\s*:?\s*([^\n\r]{3,120})",
         r"Этап закупки\s*:?\s*([^\n\r]{3,120})",
@@ -86,8 +112,7 @@ def extract_status_from_detail_text(text: str) -> str:
 
 
 def extract_deadline_from_detail_text(text: str) -> str:
-    text = html.unescape(re.sub(r"<[^>]+>", " ", text or ""))
-    text = re.sub(r"\s+", " ", text)
+    text = _plain_detail_text(text)
     patterns = [
         r"Окончание подачи заявок\s*:?\s*([0-9]{2}\.[0-9]{2}\.[0-9]{4}(?:\s+[0-9:]+)?)",
         r"Дата и время окончания срока подачи заявок\s*:?\s*([0-9]{2}\.[0-9]{2}\.[0-9]{4}(?:\s+[0-9:]+)?)",
@@ -102,22 +127,29 @@ def extract_deadline_from_detail_text(text: str) -> str:
 def verify_open_from_detail_text(card: RadarCard, detail_text: str, as_of: datetime) -> OpenVerification:
     detail_status = extract_status_from_detail_text(detail_text)
     detail_deadline = extract_deadline_from_detail_text(detail_text)
-    info = normalize_status_v2(detail_status or card.status_raw)
+    info = normalize_status_v2(detail_status)
     card_deadline = parse_datetime(card.application_deadline)
-    verified_deadline = parse_datetime(detail_deadline) or card_deadline
-    remaining = days_to_deadline(verified_deadline, as_of)
+    detail_deadline_parsed = parse_datetime(detail_deadline)
+    remaining = days_to_deadline(detail_deadline_parsed, as_of)
     reasons: list[str] = [info.reason]
-    status = "VERIFIED_OPEN"
-    if info.normalized_status == NormalizedStatus.CANCELLED:
+    if not _contains_expected_procurement_number(detail_text, card.procurement_number):
+        status = "DETAIL_UNAVAILABLE"
+        reasons.append("detail page does not contain expected procurement number")
+    elif info.normalized_status == NormalizedStatus.CANCELLED:
         status = "VERIFIED_CANCELLED"
     elif info.normalized_status in {NormalizedStatus.COMPLETED, NormalizedStatus.CONTRACT_SIGNED}:
         status = "VERIFIED_CLOSED"
+    elif not detail_status:
+        status = "DETAIL_UNAVAILABLE"
+        reasons.append("detail status is missing")
+    elif not detail_deadline or detail_deadline_parsed is None:
+        status = "DETAIL_UNAVAILABLE"
+        reasons.append("detail deadline is missing")
     elif (
         detail_deadline
         and card.application_deadline
-        and parse_datetime(detail_deadline)
         and card_deadline
-        and parse_datetime(detail_deadline).date() != card_deadline.date()
+        and detail_deadline_parsed.date() != card_deadline.date()
     ):
         status = "DEADLINE_CONFLICT"
         reasons.append("detail deadline differs from card deadline")
@@ -127,6 +159,7 @@ def verify_open_from_detail_text(card: RadarCard, detail_text: str, as_of: datet
         status = "DEADLINE_CONFLICT"
         reasons.append("detail deadline is not in the future")
     else:
+        status = "VERIFIED_OPEN"
         reasons.append("detail status and deadline confirm open procurement")
     return OpenVerification(
         procurement_number=card.procurement_number,
