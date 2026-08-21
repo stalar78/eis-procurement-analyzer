@@ -6,6 +6,7 @@ import pytest
 import requests
 
 from radar import http
+import radar.source_resolution as source_resolution
 from radar.config import RadarConfig
 from radar.discovery import _detail_unavailable_diagnostics, discover_cards, verify_cards_from_detail
 from radar.models import NormalizedStatus
@@ -267,6 +268,173 @@ def test_detail_verification_successful_https_fetch_uses_default_tls(monkeypatch
 
     assert result["open_verification_status"] == "VERIFIED_OPEN"
     assert calls == [(card.source_url, {"timeout": 30})]
+    assert result["detail_source_recovery_status"] == "NOT_ATTEMPTED"
+
+
+def test_detail_verification_404_recovers_canonical_source(monkeypatch) -> None:
+    card = _verification_card()
+    stale_url = "https://zakupki.gov.ru/epz/order/notice/zk20/view/common-info.html?regNumber=" + PROCUREMENT_NUMBER
+    recovered_url = "https://zakupki.gov.ru/epz/order/notice/ea20/view/common-info.html?regNumber=" + PROCUREMENT_NUMBER
+    card.source_url = stale_url
+    calls = []
+
+    class Response:
+        def __init__(self, status_code: int, text: str, url: str) -> None:
+            self.status_code = status_code
+            self.text = text
+            self.url = url
+
+    def fake_get(url: str, **_kwargs):
+        calls.append(url)
+        if url == stale_url:
+            return Response(404, "<html>404 Not Found</html>", url)
+        if "extendedsearch" in url:
+            return Response(200, f'<html>{PROCUREMENT_NUMBER}<a href="/epz/order/notice/ea20/view/common-info.html?regNumber={PROCUREMENT_NUMBER}">detail</a></html>', url)
+        if url == recovered_url:
+            return Response(200, _detail(), url)
+        return Response(404, "<html>404 Not Found</html>", url)
+
+    monkeypatch.setattr(http, "get", fake_get)
+
+    result = verify_cards_from_detail([card], _as_of(), limit=1)[0]
+
+    assert result["open_verification_status"] == "VERIFIED_OPEN"
+    assert result["detail_failure_code"] == ""
+    assert result["detail_source_recovery_status"] == "RECOVERED"
+    assert result["detail_source_resolution_status"] == "RESOLVED_SEARCH_RECOVERY"
+    assert result["detail_recovered_url"] == recovered_url
+    assert calls == [stale_url, stale_url, calls[2], recovered_url]
+
+
+def test_detail_verification_recovered_identity_mismatch_fails_closed(monkeypatch) -> None:
+    card = _verification_card()
+    stale_url = "https://zakupki.gov.ru/epz/order/notice/zk20/view/common-info.html?regNumber=" + PROCUREMENT_NUMBER
+    recovered_url = "https://zakupki.gov.ru/epz/order/notice/ea20/view/common-info.html?regNumber=" + PROCUREMENT_NUMBER
+    card.source_url = stale_url
+
+    class Response:
+        def __init__(self, status_code: int, text: str, url: str) -> None:
+            self.status_code = status_code
+            self.text = text
+            self.url = url
+
+    def fake_get(url: str, **_kwargs):
+        if url == stale_url:
+            return Response(404, "<html>404 Not Found</html>", url)
+        if "extendedsearch" in url:
+            return Response(200, f'<html>{PROCUREMENT_NUMBER}<a href="/epz/order/notice/ea20/view/common-info.html?regNumber={PROCUREMENT_NUMBER}">detail</a></html>', url)
+        if url == recovered_url:
+            return Response(200, _detail(number=OTHER_PROCUREMENT_NUMBER), url)
+        return Response(404, "<html>404 Not Found</html>", url)
+
+    monkeypatch.setattr(http, "get", fake_get)
+
+    result = verify_cards_from_detail([card], _as_of(), limit=1)[0]
+
+    assert result["open_verification_status"] == "DETAIL_UNAVAILABLE"
+    assert result["detail_failure_code"] == "SOURCE_RECOVERY_FAILED"
+    assert result["detail_source_recovery_status"] == "FAILED"
+
+
+def test_detail_verification_404_recovery_failure_is_structured(monkeypatch) -> None:
+    card = _verification_card()
+    card.source_url = "https://zakupki.gov.ru/epz/order/notice/zk20/view/common-info.html?regNumber=" + PROCUREMENT_NUMBER
+    calls = []
+
+    class Response:
+        def __init__(self, status_code: int, text: str, url: str) -> None:
+            self.status_code = status_code
+            self.text = text
+            self.url = url
+
+    def fake_get(url: str, **_kwargs):
+        calls.append(url)
+        if "extendedsearch" in url:
+            return Response(200, "<html>no matching procurement</html>", url)
+        return Response(404, "<html>404 Not Found</html>", url)
+
+    monkeypatch.setattr(http, "get", fake_get)
+
+    result = verify_cards_from_detail([card], _as_of(), limit=1)[0]
+
+    assert result["open_verification_status"] == "DETAIL_UNAVAILABLE"
+    assert result["detail_failure_code"] == "SOURCE_URL_NOT_FOUND"
+    assert result["detail_source_recovery_status"] == "FAILED"
+    assert result["detail_source_resolution_status"] == "NOT_FOUND_CONFIRMED"
+    assert len(calls) == 3
+
+
+def test_detail_verification_223_stale_url_recovers_without_forcing_44fz_path(monkeypatch) -> None:
+    card = _verification_card()
+    stale_url = "https://zakupki.gov.ru/223/purchase/common-info.html?regNumber=" + PROCUREMENT_NUMBER
+    recovered_url = "https://zakupki.gov.ru/223/purchase/notice.html?regNumber=" + PROCUREMENT_NUMBER
+    card.source_url = stale_url
+    calls = []
+
+    class Response:
+        def __init__(self, status_code: int, text: str, url: str) -> None:
+            self.status_code = status_code
+            self.text = text
+            self.url = url
+
+    def fake_get(url: str, **_kwargs):
+        calls.append(url)
+        if url == stale_url:
+            return Response(404, "<html>404 Not Found</html>", url)
+        if "extendedsearch" in url:
+            return Response(200, f'<html>{PROCUREMENT_NUMBER}<a href="/223/purchase/notice.html?regNumber={PROCUREMENT_NUMBER}">223 detail</a></html>', url)
+        if url == recovered_url:
+            return Response(200, _detail(), url)
+        return Response(404, "<html>404 Not Found</html>", url)
+
+    monkeypatch.setattr(http, "get", fake_get)
+
+    result = verify_cards_from_detail([card], _as_of(), limit=1)[0]
+
+    assert result["open_verification_status"] == "VERIFIED_OPEN"
+    assert result["detail_source_recovery_status"] == "RECOVERED"
+    assert result["detail_recovered_url"] == recovered_url
+    assert all("/epz/order/notice/" not in url for url in calls)
+
+
+def test_223_stale_url_alternate_recovery_does_not_request_44fz(monkeypatch) -> None:
+    card = _verification_card()
+    stale_url = "https://zakupki.gov.ru/223/purchase/common-info.html?regNumber=" + PROCUREMENT_NUMBER
+    recovered_link = "https://zakupki.gov.ru/223/purchase/notice.html?regNumber=" + PROCUREMENT_NUMBER
+    card.source_url = stale_url
+    calls = []
+    sibling_seeds = []
+
+    class Response:
+        def __init__(self, status_code: int, text: str, url: str) -> None:
+            self.status_code = status_code
+            self.text = text
+            self.url = url
+
+    original_sibling_section_urls = source_resolution.sibling_section_urls
+
+    def tracked_sibling_section_urls(url: str, number: str):
+        sibling_seeds.append(url)
+        return original_sibling_section_urls(url, number)
+
+    def fake_get(url: str, **_kwargs):
+        calls.append(url)
+        if url == stale_url:
+            return Response(404, "<html>404 Not Found</html>", url)
+        if "extendedsearch" in url:
+            return Response(200, f'<html>{PROCUREMENT_NUMBER}<a href="/223/purchase/notice.html?regNumber={PROCUREMENT_NUMBER}">223 detail</a></html>', url)
+        return Response(404, "<html>404 Not Found</html>", url)
+
+    monkeypatch.setattr(source_resolution, "sibling_section_urls", tracked_sibling_section_urls)
+    monkeypatch.setattr(http, "get", fake_get)
+
+    result = verify_cards_from_detail([card], _as_of(), limit=1)[0]
+
+    assert result["open_verification_status"] == "DETAIL_UNAVAILABLE"
+    assert result["detail_failure_code"] == "SOURCE_RECOVERY_FAILED"
+    assert result["detail_source_recovery_status"] == "FAILED"
+    assert sibling_seeds == [recovered_link]
+    assert all("/epz/order/notice/" not in url for url in calls)
 
 
 def test_detail_verification_ssl_error_degrades_to_detail_unavailable(monkeypatch) -> None:

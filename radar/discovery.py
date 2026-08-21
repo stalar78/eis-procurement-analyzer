@@ -92,18 +92,66 @@ def load_offline_cards(path: str | Path) -> list[RadarCard]:
 
 def verify_cards_from_detail(cards: list[RadarCard], as_of: datetime, limit: int) -> list[dict[str, Any]]:
     import requests
+    from radar.source_resolution import (
+        SourceResolutionPolicy,
+        content_has_number,
+        resolve_procurement_source_content,
+    )
 
     results: list[dict[str, Any]] = []
+    recovery_policy = SourceResolutionPolicy(
+        max_attempts_per_strategy=1,
+        enable_cached_source_fallback=False,
+        confirmation_attempts_for_not_found=1,
+    )
     for card in cards[:limit]:
         if not card.source_url:
             results.append(unavailable_verification(card, "missing source URL", as_of, "MISSING_SOURCE_URL").to_dict())
             continue
         try:
             response = http.get(card.source_url, timeout=30)
-            if response.status_code >= 400:
-                results.append(unavailable_verification(card, f"HTTP {response.status_code}", as_of, "HTTP_ERROR").to_dict())
+            if response.status_code == 404:
+                recovery = resolve_procurement_source_content(
+                    card.procurement_number,
+                    source_url=card.source_url,
+                    policy=recovery_policy,
+                )
+                if (
+                    recovery.result.status in {"RESOLVED_LIVE", "RESOLVED_SEARCH_RECOVERY", "RESOLVED_ALTERNATE_SECTION"}
+                    and recovery.content
+                    and content_has_number(recovery.content, card.procurement_number)
+                ):
+                    verification = verify_open_from_detail_text(card, recovery.content, as_of)
+                    row = verification.to_dict()
+                    row["detail_source_url"] = redact_url(getattr(response, "url", "") or card.source_url)
+                    row["detail_direct_http_status"] = response.status_code
+                    row["detail_source_recovery_status"] = "RECOVERED"
+                    row["detail_recovered_url"] = redact_url(recovery.result.canonical_url)
+                    row["detail_source_resolution_status"] = recovery.result.status
+                    row["detail_source_resolution_attempts"] = len(recovery.result.attempts)
+                    results.append(row)
+                    continue
+                failure_code = "SOURCE_URL_NOT_FOUND" if recovery.result.status == "NOT_FOUND_CONFIRMED" else "SOURCE_RECOVERY_FAILED"
+                unavailable = unavailable_verification(card, "source recovery failed", as_of, failure_code).to_dict()
+                unavailable["detail_source_url"] = redact_url(getattr(response, "url", "") or card.source_url)
+                unavailable["detail_direct_http_status"] = response.status_code
+                unavailable["detail_source_recovery_status"] = "FAILED"
+                unavailable["detail_source_resolution_status"] = recovery.result.status
+                unavailable["detail_source_resolution_attempts"] = len(recovery.result.attempts)
+                results.append(unavailable)
                 continue
-            results.append(verify_open_from_detail_text(card, response.text, as_of).to_dict())
+            if response.status_code >= 400:
+                unavailable = unavailable_verification(card, f"HTTP {response.status_code}", as_of, "HTTP_ERROR").to_dict()
+                unavailable["detail_source_url"] = redact_url(getattr(response, "url", "") or card.source_url)
+                unavailable["detail_direct_http_status"] = response.status_code
+                unavailable["detail_source_recovery_status"] = "NOT_ATTEMPTED"
+                results.append(unavailable)
+                continue
+            row = verify_open_from_detail_text(card, response.text, as_of).to_dict()
+            row["detail_source_url"] = redact_url(getattr(response, "url", "") or card.source_url)
+            row["detail_direct_http_status"] = response.status_code
+            row["detail_source_recovery_status"] = "NOT_ATTEMPTED"
+            results.append(row)
         except requests.RequestException:
             results.append(unavailable_verification(card, "detail request failed", as_of, "REQUEST_ERROR").to_dict())
     return results

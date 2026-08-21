@@ -85,6 +85,12 @@ class SourceResolutionResult:
 
 
 @dataclass
+class SourceResolutionContentResult:
+    result: SourceResolutionResult
+    content: str = ""
+
+
+@dataclass
 class SourceResolutionPolicy:
     max_attempts_per_strategy: int = 2
     retry_delay_seconds: float = 2.0
@@ -268,7 +274,8 @@ def sibling_section_urls(url: str, number: str) -> list[str]:
         if path == parsed.path and "/view/" not in parsed.path:
             continue
         urls.append(urlunparse(parsed._replace(path=path, query=f"regNumber={number}", fragment="")))
-    urls.append(f"https://zakupki.gov.ru/epz/order/notice/printForm/view.html?regNumber={number}")
+    if "/epz/order/notice/" in parsed.path:
+        urls.append(f"https://zakupki.gov.ru/epz/order/notice/printForm/view.html?regNumber={number}")
     return sorted(set(urls))
 
 
@@ -440,3 +447,35 @@ def resolve_procurement_source(
         validation_warnings=["single 404 is treated as transient until exact search absence is confirmed"] if temporary_count else [],
         resolved_at=resolved_at,
     )
+
+
+def resolve_procurement_source_content(
+    procurement_number: str,
+    *,
+    source_url: str | None = None,
+    output_dir: str | Path | None = None,
+    policy: SourceResolutionPolicy | None = None,
+    fetch: Callable[[str], tuple[int | None, str, str]] | None = None,
+) -> SourceResolutionContentResult:
+    fetch = fetch or default_fetch
+    content_by_fingerprint: dict[str, str] = {}
+
+    def capture_fetch(url: str) -> tuple[int | None, str, str]:
+        status, resolved_url, content = fetch(url)
+        if content:
+            content_by_fingerprint[fingerprint_content(content)] = content
+        return status, resolved_url, content
+
+    result = resolve_procurement_source(
+        procurement_number,
+        source_url=source_url,
+        output_dir=output_dir,
+        policy=policy,
+        fetch=capture_fetch,
+    )
+    content = ""
+    for attempt in reversed(result.attempts):
+        if attempt.content_valid and attempt.content_fingerprint in content_by_fingerprint:
+            content = content_by_fingerprint[attempt.content_fingerprint]
+            break
+    return SourceResolutionContentResult(result=result, content=content)

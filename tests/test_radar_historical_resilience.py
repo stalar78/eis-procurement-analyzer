@@ -130,6 +130,13 @@ def test_alternate_section_can_recover_sibling_links() -> None:
     urls = sibling_section_urls(f"https://zakupki.gov.ru/epz/order/notice/eap20/view/documents.html?regNumber={NUMBER}", NUMBER)
     assert any("common-info" in url for url in urls)
     assert any("supplier-results" in url for url in urls)
+    assert any("/epz/order/notice/printForm/" in url for url in urls)
+
+
+def test_223_source_does_not_generate_44fz_print_form_sibling() -> None:
+    urls = sibling_section_urls(f"https://zakupki.gov.ru/223/purchase/common-info.html?regNumber={NUMBER}", NUMBER)
+
+    assert urls == []
 
 
 def test_source_mismatch_still_fails_hard() -> None:
