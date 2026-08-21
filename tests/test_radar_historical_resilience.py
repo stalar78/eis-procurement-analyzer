@@ -96,6 +96,8 @@ def test_production_http_paths_do_not_disable_tls_verification() -> None:
         assert "verify=False" not in text
         assert "disable_warnings" not in text
         assert "InsecureRequestWarning" not in text
+        assert "CERT_NONE" not in text
+        assert "check_hostname = False" not in text
 
 
 def test_exact_number_search_recovers_stale_direct_url() -> None:

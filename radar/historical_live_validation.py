@@ -11,6 +11,7 @@ from pathlib import Path
 from typing import Any, Callable
 from urllib.parse import urlencode, urljoin
 
+from radar import http
 from radar.analog_search import completed_only_params, generate_historical_queries
 from radar.competition_metrics import calculate_competition_metrics
 from radar.config import RadarConfig
@@ -251,10 +252,8 @@ def resolve_source_card(number: str, source_url: str | None, fetch: Callable[[st
     url = default_source_url(number, source_url)
     diagnostics = {"procurement_number": number, "canonical_source_url": url, "status": "NOT_REQUESTED", "warnings": []}
     if fetch is None:
-        import requests
-
         def fetch(target: str) -> str:
-            response = requests.get(target, timeout=45)
+            response = http.get(target, timeout=45)
             response.raise_for_status()
             return response.text
 
@@ -521,9 +520,7 @@ def collect_result_for_analog(
 
     def tuple_fetch(target: str) -> tuple[int | None, str]:
         if fetch is None:
-            import requests
-
-            response = requests.get(target, timeout=45, headers={"User-Agent": "Mozilla/5.0"})
+            response = http.get(target, timeout=45, headers={"User-Agent": "Mozilla/5.0"})
             return response.status_code, response.text
         result = fetch(target)
         if isinstance(result, tuple):
@@ -913,10 +910,8 @@ def run_live_historical_validation(
     if not dry_run:
         try:
             if fetch is None:
-                import requests
-
                 def fetch(target: str) -> str:
-                    response = requests.get(target, timeout=45)
+                    response = http.get(target, timeout=45)
                     response.raise_for_status()
                     return response.text
 

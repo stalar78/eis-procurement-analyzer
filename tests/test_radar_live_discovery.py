@@ -5,6 +5,7 @@ from zoneinfo import ZoneInfo
 import pytest
 import requests
 
+from radar import http
 from radar.config import RadarConfig
 from radar.discovery import _detail_unavailable_diagnostics, discover_cards, verify_cards_from_detail
 from radar.models import NormalizedStatus
@@ -239,7 +240,7 @@ def test_http_error_has_failure_code(monkeypatch) -> None:
         status_code = 503
         text = ""
 
-    monkeypatch.setattr(requests, "get", lambda *_args, **_kwargs: Response())
+    monkeypatch.setattr(http, "get", lambda *_args, **_kwargs: Response())
 
     result = verify_cards_from_detail([card], _as_of(), limit=1)[0]
 
@@ -260,7 +261,7 @@ def test_detail_verification_successful_https_fetch_uses_default_tls(monkeypatch
         calls.append((url, kwargs))
         return Response()
 
-    monkeypatch.setattr(requests, "get", fake_get)
+    monkeypatch.setattr(http, "get", fake_get)
 
     result = verify_cards_from_detail([card], _as_of(), limit=1)[0]
 
@@ -275,7 +276,7 @@ def test_detail_verification_ssl_error_degrades_to_detail_unavailable(monkeypatc
     def fake_get(_url: str, **_kwargs):
         raise requests.exceptions.SSLError("certificate verify failed")
 
-    monkeypatch.setattr(requests, "get", fake_get)
+    monkeypatch.setattr(http, "get", fake_get)
 
     result = verify_cards_from_detail([card], _as_of(), limit=1)[0]
 
@@ -299,7 +300,7 @@ def test_detail_verification_request_errors_use_sanitized_reason(monkeypatch, er
     def fake_get(_url: str, **_kwargs):
         raise error
 
-    monkeypatch.setattr(requests, "get", fake_get)
+    monkeypatch.setattr(http, "get", fake_get)
 
     result = verify_cards_from_detail([card], _as_of(), limit=1)[0]
 
@@ -316,7 +317,7 @@ def test_detail_verification_non_request_exception_is_not_request_error(monkeypa
     def fake_get(_url: str, **_kwargs):
         raise RuntimeError("programming bug")
 
-    monkeypatch.setattr(requests, "get", fake_get)
+    monkeypatch.setattr(http, "get", fake_get)
 
     with pytest.raises(RuntimeError, match="programming bug"):
         verify_cards_from_detail([card], _as_of(), limit=1)

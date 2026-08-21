@@ -10,8 +10,9 @@ from urllib.parse import urljoin
 
 from lxml import html
 
-from radar.analog_search import repair_mojibake
 from radar import historical_result_extraction_version
+from radar import http
+from radar.analog_search import repair_mojibake
 from radar.live_collection import section_url
 from radar.models import AnalogResultResolutionDiagnostic, AssembledHistoricalResult, HistoricalAnalog
 
@@ -75,9 +76,7 @@ class ProtocolExtractionDiagnostic:
 
 
 def _default_fetch(url: str) -> tuple[int | None, str]:
-    import requests
-
-    response = requests.get(url, timeout=45, headers={"User-Agent": "Mozilla/5.0"})
+    response = http.get(url, timeout=45, headers={"User-Agent": "Mozilla/5.0"})
     return response.status_code, response.text
 
 

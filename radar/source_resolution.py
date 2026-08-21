@@ -10,6 +10,7 @@ from pathlib import Path
 from typing import Any, Callable
 from urllib.parse import parse_qs, urlencode, urljoin, urlparse, urlunparse
 
+from radar import http
 from radar.discovery import normalize_card
 from radar.live_collection import EIS_HOSTS, extract_procurement_number, normalize_eis_url, validate_eis_url
 from radar.models import RadarCard
@@ -181,9 +182,7 @@ def extract_card_from_source(number: str, url: str, html: str) -> RadarCard:
 
 
 def default_fetch(url: str) -> tuple[int | None, str, str]:
-    import requests
-
-    response = requests.get(url, timeout=45, headers={"User-Agent": "Mozilla/5.0"})
+    response = http.get(url, timeout=45, headers={"User-Agent": "Mozilla/5.0"})
     return response.status_code, response.url, response.text
 
 

@@ -9,6 +9,7 @@ from pathlib import Path
 from typing import Any
 
 from radar.config import RadarConfig
+from radar import http
 from radar.models import RadarCard
 from radar.open_verification import build_status_audit, is_provisionally_open, unavailable_verification, verify_open_from_detail_text
 from radar.prefilter import days_to_deadline, normalize_status, parse_datetime
@@ -98,7 +99,7 @@ def verify_cards_from_detail(cards: list[RadarCard], as_of: datetime, limit: int
             results.append(unavailable_verification(card, "missing source URL", as_of, "MISSING_SOURCE_URL").to_dict())
             continue
         try:
-            response = requests.get(card.source_url, timeout=30)
+            response = http.get(card.source_url, timeout=30)
             if response.status_code >= 400:
                 results.append(unavailable_verification(card, f"HTTP {response.status_code}", as_of, "HTTP_ERROR").to_dict())
                 continue
