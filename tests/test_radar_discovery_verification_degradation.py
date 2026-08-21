@@ -119,12 +119,37 @@ def test_detail_unavailable_diagnostics_are_preserved(monkeypatch) -> None:
         monkeypatch,
         [_active_card("1", "2026-08-20"), _active_card("2", "2026-08-21")],
         [
-            {"procurement_number": "1", "open_verification_status": "DETAIL_UNAVAILABLE", "open_verification_reasons": ["timeout"]},
+            {"procurement_number": "1", "open_verification_status": "DETAIL_UNAVAILABLE", "open_verification_reasons": ["timeout"], "detail_failure_code": "REQUEST_ERROR"},
             {"procurement_number": "2", "open_verification_status": "VERIFIED_CLOSED"},
         ],
     )
 
     assert [card.procurement_number for card in cards] == ["1"]
     assert diagnostics["detail_unavailable"] == 1
+    assert diagnostics["detail_unavailable_by_code"] == {"REQUEST_ERROR": 1}
+    assert diagnostics["detail_unavailable_examples_by_code"] == {"REQUEST_ERROR": ["1"]}
     assert diagnostics["detail_verification_rejected"] == 1
     assert diagnostics["open_verifications"][0]["open_verification_status"] == "DETAIL_UNAVAILABLE"
+
+
+def test_detail_unavailable_by_code_counts_only_unavailable_rows(monkeypatch) -> None:
+    cards, diagnostics = _run_with_cards(
+        monkeypatch,
+        [
+            _active_card("1", "2026-08-20"),
+            _active_card("2", "2026-08-21"),
+            _active_card("3", "2026-08-22"),
+            _active_card("4", "2026-08-23"),
+        ],
+        [
+            {"procurement_number": "1", "open_verification_status": "DETAIL_UNAVAILABLE", "detail_failure_code": "HTTP_ERROR"},
+            {"procurement_number": "2", "open_verification_status": "DETAIL_UNAVAILABLE", "detail_failure_code": "HTTP_ERROR"},
+            {"procurement_number": "3", "open_verification_status": "DETAIL_UNAVAILABLE", "detail_failure_code": "DETAIL_STATUS_MISSING"},
+            {"procurement_number": "4", "open_verification_status": "DEADLINE_CONFLICT", "detail_failure_code": ""},
+        ],
+    )
+
+    assert [card.procurement_number for card in cards] == ["1", "2", "3"]
+    assert diagnostics["detail_unavailable"] == 3
+    assert diagnostics["detail_unavailable_by_code"] == {"DETAIL_STATUS_MISSING": 1, "HTTP_ERROR": 2}
+    assert diagnostics["detail_unavailable_examples_by_code"] == {"DETAIL_STATUS_MISSING": ["3"], "HTTP_ERROR": ["1", "2"]}

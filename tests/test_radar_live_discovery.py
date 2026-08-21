@@ -6,7 +6,7 @@ import pytest
 import requests
 
 from radar.config import RadarConfig
-from radar.discovery import discover_cards, verify_cards_from_detail
+from radar.discovery import _detail_unavailable_diagnostics, discover_cards, verify_cards_from_detail
 from radar.models import NormalizedStatus
 from radar.open_verification import (
     build_status_audit,
@@ -146,6 +146,7 @@ def test_valid_detail_page_verifies_open_procurement() -> None:
     result = verify_open_from_detail_text(_verification_card(), _detail(), _as_of())
 
     assert result.open_verification_status == "VERIFIED_OPEN"
+    assert result.detail_failure_code == ""
 
 
 def test_exact_procurement_number_identity_verifies_open_procurement() -> None:
@@ -158,6 +159,7 @@ def test_different_procurement_number_identity_does_not_verify_open_procurement(
     result = verify_open_from_detail_text(_verification_card(), _detail(number=OTHER_PROCUREMENT_NUMBER), _as_of())
 
     assert result.open_verification_status == "DETAIL_UNAVAILABLE"
+    assert result.detail_failure_code == "IDENTITY_MISMATCH"
 
 
 def test_unrelated_numeric_fields_are_not_concatenated_into_procurement_identity() -> None:
@@ -172,24 +174,77 @@ def test_unrelated_numeric_fields_are_not_concatenated_into_procurement_identity
     result = verify_open_from_detail_text(_verification_card(), detail, _as_of())
 
     assert result.open_verification_status == "DETAIL_UNAVAILABLE"
+    assert result.detail_failure_code == "IDENTITY_MISMATCH"
+
+
+def test_missing_detail_status_has_failure_code() -> None:
+    result = verify_open_from_detail_text(_verification_card(), _detail(status=""), _as_of())
+
+    assert result.open_verification_status == "DETAIL_UNAVAILABLE"
+    assert result.detail_failure_code == "DETAIL_STATUS_MISSING"
+
+
+def test_missing_detail_deadline_has_failure_code() -> None:
+    result = verify_open_from_detail_text(_verification_card(), _detail(deadline=""), _as_of())
+
+    assert result.open_verification_status == "DETAIL_UNAVAILABLE"
+    assert result.detail_failure_code == "DETAIL_DEADLINE_MISSING"
+
+
+def test_unparseable_detail_deadline_has_failure_code() -> None:
+    detail = _detail(deadline="not-a-date")
+
+    result = verify_open_from_detail_text(_verification_card(), detail, _as_of())
+
+    assert result.open_verification_status == "DETAIL_UNAVAILABLE"
+    assert result.detail_failure_code == "DETAIL_DEADLINE_MISSING"
 
 
 def test_detail_deadline_conflict_blocks() -> None:
     result = verify_open_from_detail_text(_verification_card(), _detail(deadline="19.08.2026 10:00"), _as_of())
 
     assert result.open_verification_status == "DEADLINE_CONFLICT"
+    assert result.detail_failure_code == ""
 
 
 def test_valid_cancelled_detail_blocks() -> None:
     result = verify_open_from_detail_text(_verification_card(), _detail(status=CANCELLED_DETAIL_STATUS, deadline=""), _as_of())
 
     assert result.open_verification_status == "VERIFIED_CANCELLED"
+    assert result.detail_failure_code == ""
 
 
 def test_valid_closed_detail_blocks() -> None:
     result = verify_open_from_detail_text(_verification_card(), _detail(status=COMPLETED_DETAIL_STATUS, deadline=""), _as_of())
 
     assert result.open_verification_status == "VERIFIED_CLOSED"
+    assert result.detail_failure_code == ""
+
+
+def test_missing_source_url_has_failure_code() -> None:
+    card = _verification_card()
+    card.source_url = ""
+
+    result = verify_cards_from_detail([card], _as_of(), limit=1)[0]
+
+    assert result["open_verification_status"] == "DETAIL_UNAVAILABLE"
+    assert result["detail_failure_code"] == "MISSING_SOURCE_URL"
+
+
+def test_http_error_has_failure_code(monkeypatch) -> None:
+    card = _verification_card()
+    card.source_url = "https://zakupki.gov.ru/epz/order/notice/ea20/view/common-info.html"
+
+    class Response:
+        status_code = 503
+        text = ""
+
+    monkeypatch.setattr(requests, "get", lambda *_args, **_kwargs: Response())
+
+    result = verify_cards_from_detail([card], _as_of(), limit=1)[0]
+
+    assert result["open_verification_status"] == "DETAIL_UNAVAILABLE"
+    assert result["detail_failure_code"] == "HTTP_ERROR"
 
 
 def test_detail_verification_successful_https_fetch_uses_default_tls(monkeypatch) -> None:
@@ -226,6 +281,61 @@ def test_detail_verification_ssl_error_degrades_to_detail_unavailable(monkeypatc
 
     assert result["open_verification_status"] == "DETAIL_UNAVAILABLE"
     assert result["open_verification_status"] != "VERIFIED_OPEN"
+    assert result["detail_failure_code"] == "REQUEST_ERROR"
+    assert result["open_verification_reasons"] == ["detail request failed"]
+
+
+@pytest.mark.parametrize(
+    "error",
+    [
+        requests.exceptions.ConnectionError("failed via C:/Users/example/cert.pem https://secret.example/path"),
+        requests.exceptions.Timeout("timeout for https://secret.example/path"),
+    ],
+)
+def test_detail_verification_request_errors_use_sanitized_reason(monkeypatch, error: requests.RequestException) -> None:
+    card = _verification_card()
+    card.source_url = "https://zakupki.gov.ru/epz/order/notice/ea20/view/common-info.html"
+
+    def fake_get(_url: str, **_kwargs):
+        raise error
+
+    monkeypatch.setattr(requests, "get", fake_get)
+
+    result = verify_cards_from_detail([card], _as_of(), limit=1)[0]
+
+    assert result["open_verification_status"] == "DETAIL_UNAVAILABLE"
+    assert result["detail_failure_code"] == "REQUEST_ERROR"
+    assert result["open_verification_reasons"] == ["detail request failed"]
+    assert str(error) not in result["open_verification_reasons"][0]
+
+
+def test_detail_verification_non_request_exception_is_not_request_error(monkeypatch) -> None:
+    card = _verification_card()
+    card.source_url = "https://zakupki.gov.ru/epz/order/notice/ea20/view/common-info.html"
+
+    def fake_get(_url: str, **_kwargs):
+        raise RuntimeError("programming bug")
+
+    monkeypatch.setattr(requests, "get", fake_get)
+
+    with pytest.raises(RuntimeError, match="programming bug"):
+        verify_cards_from_detail([card], _as_of(), limit=1)
+
+
+def test_detail_unavailable_diagnostics_count_codes_and_examples() -> None:
+    counts, examples = _detail_unavailable_diagnostics(
+        [
+            {"procurement_number": "1", "open_verification_status": "DETAIL_UNAVAILABLE", "detail_failure_code": "HTTP_ERROR"},
+            {"procurement_number": "2", "open_verification_status": "DETAIL_UNAVAILABLE", "detail_failure_code": "HTTP_ERROR"},
+            {"procurement_number": "3", "open_verification_status": "DETAIL_UNAVAILABLE", "detail_failure_code": "HTTP_ERROR"},
+            {"procurement_number": "4", "open_verification_status": "DETAIL_UNAVAILABLE", "detail_failure_code": "HTTP_ERROR"},
+            {"procurement_number": "5", "open_verification_status": "DETAIL_UNAVAILABLE", "detail_failure_code": "DETAIL_STATUS_MISSING"},
+            {"procurement_number": "6", "open_verification_status": "VERIFIED_OPEN", "detail_failure_code": ""},
+        ]
+    )
+
+    assert counts == {"DETAIL_STATUS_MISSING": 1, "HTTP_ERROR": 4}
+    assert examples == {"DETAIL_STATUS_MISSING": ["5"], "HTTP_ERROR": ["1", "2", "3"]}
 
 
 def test_status_audit_aggregates_raw_labels() -> None:

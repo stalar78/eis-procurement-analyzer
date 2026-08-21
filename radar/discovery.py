@@ -3,7 +3,7 @@ from __future__ import annotations
 import argparse
 import asyncio
 import json
-from dataclasses import asdict
+from collections import Counter
 from datetime import datetime
 from pathlib import Path
 from typing import Any
@@ -95,17 +95,31 @@ def verify_cards_from_detail(cards: list[RadarCard], as_of: datetime, limit: int
     results: list[dict[str, Any]] = []
     for card in cards[:limit]:
         if not card.source_url:
-            results.append(unavailable_verification(card, "missing source URL", as_of).to_dict())
+            results.append(unavailable_verification(card, "missing source URL", as_of, "MISSING_SOURCE_URL").to_dict())
             continue
         try:
             response = requests.get(card.source_url, timeout=30)
             if response.status_code >= 400:
-                results.append(unavailable_verification(card, f"HTTP {response.status_code}", as_of).to_dict())
+                results.append(unavailable_verification(card, f"HTTP {response.status_code}", as_of, "HTTP_ERROR").to_dict())
                 continue
             results.append(verify_open_from_detail_text(card, response.text, as_of).to_dict())
-        except Exception as error:
-            results.append(unavailable_verification(card, str(error), as_of).to_dict())
+        except requests.RequestException:
+            results.append(unavailable_verification(card, "detail request failed", as_of, "REQUEST_ERROR").to_dict())
     return results
+
+
+def _detail_unavailable_diagnostics(verifications: list[dict[str, Any]]) -> tuple[dict[str, int], dict[str, list[str]]]:
+    counts: Counter[str] = Counter()
+    examples: dict[str, list[str]] = {}
+    for row in verifications:
+        if row.get("open_verification_status") != "DETAIL_UNAVAILABLE":
+            continue
+        code = str(row.get("detail_failure_code") or "UNKNOWN")
+        counts[code] += 1
+        procurement_number = str(row.get("procurement_number") or "")
+        if procurement_number and len(examples.setdefault(code, [])) < 3:
+            examples[code].append(procurement_number)
+    return dict(sorted(counts.items())), {key: examples[key] for key in sorted(examples)}
 
 
 async def _collect_with_existing_collector(
@@ -158,6 +172,8 @@ def discover_cards(
         "search_diagnostics": [],
         "status_audit": [],
         "open_verifications": [],
+        "detail_unavailable_by_code": {},
+        "detail_unavailable_examples_by_code": {},
     }
     if offline_input:
         cards = load_offline_cards(offline_input)
@@ -287,6 +303,9 @@ def discover_cards(
     diagnostics["status_conflicts"] = sum(1 for row in verifications if row.get("open_verification_status") == "STATUS_CONFLICT")
     diagnostics["deadline_conflicts"] = sum(1 for row in verifications if row.get("open_verification_status") == "DEADLINE_CONFLICT")
     diagnostics["detail_unavailable"] = sum(1 for row in verifications if row.get("open_verification_status") == "DETAIL_UNAVAILABLE")
+    detail_unavailable_by_code, detail_unavailable_examples_by_code = _detail_unavailable_diagnostics(verifications)
+    diagnostics["detail_unavailable_by_code"] = detail_unavailable_by_code
+    diagnostics["detail_unavailable_examples_by_code"] = detail_unavailable_examples_by_code
     diagnostics["detail_verification_rejected"] = rejected_by_detail_verification
     diagnostics["status_audit"] = build_status_audit(deduplicate_cards(collected), now)
     diagnostics["raw_cards"] = len(collected)

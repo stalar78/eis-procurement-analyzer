@@ -28,6 +28,7 @@ class OpenVerification:
     open_verification_status: str = "NOT_VERIFIED"
     open_verification_reasons: list[str] = field(default_factory=list)
     open_verification_timestamp: str = ""
+    detail_failure_code: str = ""
 
     def to_dict(self) -> dict[str, Any]:
         return asdict(self)
@@ -132,8 +133,10 @@ def verify_open_from_detail_text(card: RadarCard, detail_text: str, as_of: datet
     detail_deadline_parsed = parse_datetime(detail_deadline)
     remaining = days_to_deadline(detail_deadline_parsed, as_of)
     reasons: list[str] = [info.reason]
+    detail_failure_code = ""
     if not _contains_expected_procurement_number(detail_text, card.procurement_number):
         status = "DETAIL_UNAVAILABLE"
+        detail_failure_code = "IDENTITY_MISMATCH"
         reasons.append("detail page does not contain expected procurement number")
     elif info.normalized_status == NormalizedStatus.CANCELLED:
         status = "VERIFIED_CANCELLED"
@@ -141,9 +144,11 @@ def verify_open_from_detail_text(card: RadarCard, detail_text: str, as_of: datet
         status = "VERIFIED_CLOSED"
     elif not detail_status:
         status = "DETAIL_UNAVAILABLE"
+        detail_failure_code = "DETAIL_STATUS_MISSING"
         reasons.append("detail status is missing")
     elif not detail_deadline or detail_deadline_parsed is None:
         status = "DETAIL_UNAVAILABLE"
+        detail_failure_code = "DETAIL_DEADLINE_MISSING"
         reasons.append("detail deadline is missing")
     elif (
         detail_deadline
@@ -170,10 +175,11 @@ def verify_open_from_detail_text(card: RadarCard, detail_text: str, as_of: datet
         open_verification_status=status,
         open_verification_reasons=reasons,
         open_verification_timestamp=datetime.now(as_of.tzinfo).isoformat(timespec="seconds"),
+        detail_failure_code=detail_failure_code,
     )
 
 
-def unavailable_verification(card: RadarCard, reason: str, as_of: datetime) -> OpenVerification:
+def unavailable_verification(card: RadarCard, reason: str, as_of: datetime, detail_failure_code: str = "") -> OpenVerification:
     return OpenVerification(
         procurement_number=card.procurement_number,
         card_status_raw=card.status_raw,
@@ -181,6 +187,7 @@ def unavailable_verification(card: RadarCard, reason: str, as_of: datetime) -> O
         open_verification_status="DETAIL_UNAVAILABLE",
         open_verification_reasons=[reason],
         open_verification_timestamp=datetime.now(as_of.tzinfo).isoformat(timespec="seconds"),
+        detail_failure_code=detail_failure_code,
     )
 
 

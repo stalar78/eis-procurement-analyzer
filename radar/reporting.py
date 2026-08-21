@@ -171,6 +171,8 @@ def build_summary(
         "status_conflicts": diagnostics.get("status_conflicts", 0),
         "deadline_conflicts": diagnostics.get("deadline_conflicts", 0),
         "detail_unavailable": diagnostics.get("detail_unavailable", 0),
+        "detail_unavailable_by_code": diagnostics.get("detail_unavailable_by_code", {}),
+        "detail_unavailable_examples_by_code": diagnostics.get("detail_unavailable_examples_by_code", {}),
         "no_open_candidate_reason": diagnostics.get("no_open_candidate_reason", ""),
         "change_events": len(diagnostics.get("change_feed", [])),
         "change_feed": diagnostics.get("change_feed", []),
