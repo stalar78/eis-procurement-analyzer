@@ -364,6 +364,31 @@ def test_detail_verification_404_recovery_failure_is_structured(monkeypatch) -> 
     assert len(calls) == 3
 
 
+def test_detail_verification_echoed_exact_search_input_does_not_partially_resolve(monkeypatch) -> None:
+    card = _verification_card()
+    card.source_url = "https://zakupki.gov.ru/epz/order/notice/zk20/view/common-info.html?regNumber=" + PROCUREMENT_NUMBER
+
+    class Response:
+        def __init__(self, status_code: int, text: str, url: str) -> None:
+            self.status_code = status_code
+            self.text = text
+            self.url = url
+
+    def fake_get(url: str, **_kwargs):
+        if "extendedsearch" in url:
+            return Response(200, f'<html><input name="searchString" value="{PROCUREMENT_NUMBER}"></html>', url)
+        return Response(404, "<html>404 Not Found</html>", url)
+
+    monkeypatch.setattr(http, "get", fake_get)
+
+    result = verify_cards_from_detail([card], _as_of(), limit=1)[0]
+
+    assert result["open_verification_status"] == "DETAIL_UNAVAILABLE"
+    assert result["detail_failure_code"] == "SOURCE_URL_NOT_FOUND"
+    assert result["detail_source_recovery_status"] == "FAILED"
+    assert result["detail_source_resolution_status"] == "NOT_FOUND_CONFIRMED"
+
+
 def test_detail_verification_223_stale_url_recovers_without_forcing_44fz_path(monkeypatch) -> None:
     card = _verification_card()
     stale_url = "https://zakupki.gov.ru/223/purchase/common-info.html?regNumber=" + PROCUREMENT_NUMBER

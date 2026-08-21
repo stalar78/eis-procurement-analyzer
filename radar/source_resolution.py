@@ -395,17 +395,17 @@ def resolve_procurement_source(
         search = exact_search_url(procurement_number)
         attempt, content = make_attempt(procurement_number, "EXACT_NUMBER_SEARCH", search, fetch)
         attempts.append(attempt)
-        if attempt.content_valid:
+        if attempt.http_status == 200:
             recovered_links = extract_matching_links(procurement_number, content)
             if not recovered_links:
-                return success("PARTIAL_RESOLUTION", "EXACT_NUMBER_SEARCH", attempt, content, confidence="LOW")
+                attempt.content_valid = False
+                attempt.error_code = "EXACT_SEARCH_NO_MATCHING_LINKS"
+                return SourceResolutionResult(procurement_number, "NOT_FOUND_CONFIRMED", attempts=attempts, strategy_used="EXACT_NUMBER_SEARCH", confidence="HIGH", resolved_at=resolved_at)
             for link in recovered_links[:5]:
                 linked_attempt, linked_content = make_attempt(procurement_number, "SEARCH_RECOVERED_LINK", link, fetch)
                 attempts.append(linked_attempt)
                 if linked_attempt.content_valid:
                     return success("RESOLVED_SEARCH_RECOVERY", "SEARCH_RECOVERED_LINK", linked_attempt, linked_content)
-        elif attempt.http_status == 200 and procurement_number not in content:
-            return SourceResolutionResult(procurement_number, "NOT_FOUND_CONFIRMED", attempts=attempts, strategy_used="EXACT_NUMBER_SEARCH", confidence="HIGH", resolved_at=resolved_at)
 
     if policy.enable_alternate_section_recovery:
         seeds = recovered_links or ([source_url] if source_url else [])

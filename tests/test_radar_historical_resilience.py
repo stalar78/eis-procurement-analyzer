@@ -105,13 +105,79 @@ def test_exact_number_search_recovers_stale_direct_url() -> None:
         if "common-info" in url:
             return 404, url, "<html>404 Not Found</html>"
         if "extendedsearch" in url:
-            return 200, url, valid_html()
+            return 200, url, f'<html><a href="/epz/order/notice/eap20/view/documents.html?regNumber={NUMBER}">result {NUMBER}</a></html>'
         return 200, url, valid_html()
 
     result = resolve_procurement_source(NUMBER, source_url=f"https://zakupki.gov.ru/epz/order/notice/ea20/view/common-info.html?regNumber={NUMBER}", fetch=fetch)
     assert result.status == "RESOLVED_SEARCH_RECOVERY"
     assert result.source_card is not None
     assert result.source_card.nmck == 750000
+
+
+def test_exact_number_search_ignores_echoed_input_value() -> None:
+    def fetch(url: str):
+        if "extendedsearch" in url:
+            return 200, url, f'<html><input name="searchString" value="{NUMBER}"></html>'
+        return 404, url, "<html>404 Not Found</html>"
+
+    result = resolve_procurement_source(NUMBER, fetch=fetch)
+
+    assert result.status == "NOT_FOUND_CONFIRMED"
+    assert result.status != "PARTIAL_RESOLUTION"
+    assert result.attempts[0].strategy == "EXACT_NUMBER_SEARCH"
+    assert result.attempts[0].error_code == "EXACT_SEARCH_NO_MATCHING_LINKS"
+
+
+def test_exact_number_search_ignores_unrelated_text_without_matching_link() -> None:
+    def fetch(url: str):
+        if "extendedsearch" in url:
+            return 200, url, f"<html><body>Search audit text mentions {NUMBER}, but has no result anchors.</body></html>"
+        return 404, url, "<html>404 Not Found</html>"
+
+    result = resolve_procurement_source(NUMBER, fetch=fetch)
+
+    assert result.status == "NOT_FOUND_CONFIRMED"
+    assert result.status != "PARTIAL_RESOLUTION"
+    assert result.attempts[0].error_code == "EXACT_SEARCH_NO_MATCHING_LINKS"
+
+
+def test_exact_number_search_follows_real_44fz_result_link() -> None:
+    recovered_url = f"https://zakupki.gov.ru/epz/order/notice/eap20/view/documents.html?regNumber={NUMBER}"
+    calls = []
+
+    def fetch(url: str):
+        calls.append(url)
+        if "extendedsearch" in url:
+            return 200, url, f'<html><a href="/epz/order/notice/eap20/view/documents.html?regNumber={NUMBER}">result</a></html>'
+        if url == recovered_url:
+            return 200, url, valid_html()
+        return 404, url, "<html>404 Not Found</html>"
+
+    result = resolve_procurement_source(NUMBER, fetch=fetch)
+
+    assert result.status == "RESOLVED_SEARCH_RECOVERY"
+    assert result.canonical_url == recovered_url
+    assert recovered_url in calls
+
+
+def test_exact_number_search_follows_real_223_result_link_without_44fz_fabrication() -> None:
+    recovered_url = f"https://zakupki.gov.ru/223/purchase/notice.html?regNumber={NUMBER}"
+    calls = []
+
+    def fetch(url: str):
+        calls.append(url)
+        if "extendedsearch" in url:
+            return 200, url, f'<html><a href="/223/purchase/notice.html?regNumber={NUMBER}">223 result</a></html>'
+        if url == recovered_url:
+            return 200, url, valid_html()
+        return 404, url, "<html>404 Not Found</html>"
+
+    result = resolve_procurement_source(NUMBER, fetch=fetch)
+
+    assert result.status == "RESOLVED_SEARCH_RECOVERY"
+    assert result.canonical_url == recovered_url
+    assert recovered_url in calls
+    assert all("/epz/order/notice/" not in url for url in calls if "extendedsearch" not in url)
 
 
 def test_cached_last_known_good_url_is_reused(tmp_path: Path) -> None:
