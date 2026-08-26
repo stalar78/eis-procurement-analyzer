@@ -698,6 +698,243 @@ def test_direct_transient_failure_with_failed_last_known_good_reaches_exact_sear
     assert any("extendedsearch" in url for url in calls)
 
 
+def test_proven_canonical_404_retry_succeeds(monkeypatch, tmp_path) -> None:
+    db = tmp_path / "radar.db"
+    canonical_url = "https://zakupki.gov.ru/epz/order/notice/ea20/view/common-info.html?regNumber=" + PROCUREMENT_NUMBER
+    card = _verification_card()
+    card.source_url = canonical_url
+    state = RadarState(db)
+    state.save_successful_source_url(
+        procurement_number=PROCUREMENT_NUMBER,
+        source_url=canonical_url,
+        fetched_at=datetime.now().astimezone().isoformat(timespec="seconds"),
+        latest_known_validation_status="VERIFIED_OPEN",
+    )
+    state.close()
+    calls = []
+
+    def fake_get(url: str, **_kwargs):
+        calls.append(url)
+        if url == canonical_url and len(calls) == 1:
+            return DetailResponse(404, "<html>404 Not Found</html>", url)
+        if url == canonical_url:
+            return DetailResponse(200, _detail(), url)
+        raise AssertionError(f"unexpected network request: {url}")
+
+    monkeypatch.setattr(http, "get", fake_get)
+    state = RadarState(db)
+    result = verify_cards_from_detail([card], _as_of(), limit=1, state=state)[0]
+    state.close()
+
+    assert result["open_verification_status"] == "VERIFIED_OPEN"
+    assert result["detail_source_strategy"] == "PROVEN_CANONICAL_RETRY"
+    assert result["detail_source_recovery_status"] == "RETRIED"
+    assert result["detail_proven_canonical_retry_count"] == 1
+    assert calls == [canonical_url, canonical_url]
+
+
+def test_proven_canonical_request_exception_retry_succeeds(monkeypatch, tmp_path) -> None:
+    db = tmp_path / "radar.db"
+    canonical_url = "https://zakupki.gov.ru/epz/order/notice/ea20/view/common-info.html?regNumber=" + PROCUREMENT_NUMBER
+    card = _verification_card()
+    card.source_url = canonical_url
+    state = RadarState(db)
+    state.save_successful_source_url(
+        procurement_number=PROCUREMENT_NUMBER,
+        source_url=canonical_url,
+        fetched_at=datetime.now().astimezone().isoformat(timespec="seconds"),
+        latest_known_validation_status="VERIFIED_OPEN",
+    )
+    state.close()
+    calls = []
+
+    def fake_get(url: str, **_kwargs):
+        calls.append(url)
+        if url == canonical_url and len(calls) == 1:
+            raise requests.exceptions.ConnectionError("temporary connection failure")
+        if url == canonical_url:
+            return DetailResponse(200, _detail(), url)
+        raise AssertionError(f"unexpected network request: {url}")
+
+    monkeypatch.setattr(http, "get", fake_get)
+    state = RadarState(db)
+    result = verify_cards_from_detail([card], _as_of(), limit=1, state=state)[0]
+    state.close()
+
+    assert result["open_verification_status"] == "VERIFIED_OPEN"
+    assert result["detail_source_strategy"] == "PROVEN_CANONICAL_RETRY"
+    assert calls == [canonical_url, canonical_url]
+
+
+def test_proven_canonical_503_retry_succeeds(monkeypatch, tmp_path) -> None:
+    db = tmp_path / "radar.db"
+    canonical_url = "https://zakupki.gov.ru/epz/order/notice/ea20/view/common-info.html?regNumber=" + PROCUREMENT_NUMBER
+    card = _verification_card()
+    card.source_url = canonical_url
+    state = RadarState(db)
+    state.save_successful_source_url(
+        procurement_number=PROCUREMENT_NUMBER,
+        source_url=canonical_url,
+        fetched_at=datetime.now().astimezone().isoformat(timespec="seconds"),
+        latest_known_validation_status="VERIFIED_OPEN",
+    )
+    state.close()
+    calls = []
+
+    def fake_get(url: str, **_kwargs):
+        calls.append(url)
+        if url == canonical_url and len(calls) == 1:
+            return DetailResponse(503, "<html>Service Unavailable</html>", url)
+        if url == canonical_url:
+            return DetailResponse(200, _detail(), url)
+        raise AssertionError(f"unexpected network request: {url}")
+
+    monkeypatch.setattr(http, "get", fake_get)
+    state = RadarState(db)
+    result = verify_cards_from_detail([card], _as_of(), limit=1, state=state)[0]
+    state.close()
+
+    assert result["open_verification_status"] == "VERIFIED_OPEN"
+    assert result["detail_source_strategy"] == "PROVEN_CANONICAL_RETRY"
+    assert calls == [canonical_url, canonical_url]
+
+
+def test_proven_canonical_retry_failure_falls_through_to_exact_search(monkeypatch, tmp_path) -> None:
+    db = tmp_path / "radar.db"
+    canonical_url = "https://zakupki.gov.ru/epz/order/notice/stale/view/common-info.html?regNumber=" + PROCUREMENT_NUMBER
+    recovered_url = "https://zakupki.gov.ru/epz/order/notice/ea20/view/common-info.html?regNumber=" + PROCUREMENT_NUMBER
+    card = _verification_card()
+    card.source_url = canonical_url
+    state = RadarState(db)
+    state.save_successful_source_url(
+        procurement_number=PROCUREMENT_NUMBER,
+        source_url=canonical_url,
+        fetched_at=datetime.now().astimezone().isoformat(timespec="seconds"),
+        latest_known_validation_status="VERIFIED_OPEN",
+    )
+    state.close()
+    calls = []
+
+    def fake_get(url: str, **_kwargs):
+        calls.append(url)
+        if url == canonical_url:
+            return DetailResponse(404, "<html>404 Not Found</html>", url)
+        if "extendedsearch" in url:
+            return DetailResponse(200, f'<html><a href="/epz/order/notice/ea20/view/common-info.html?regNumber={PROCUREMENT_NUMBER}">detail</a></html>', url)
+        if url == recovered_url:
+            return DetailResponse(200, _detail(), url)
+        return DetailResponse(404, "<html>404 Not Found</html>", url)
+
+    monkeypatch.setattr(http, "get", fake_get)
+    state = RadarState(db)
+    result = verify_cards_from_detail([card], _as_of(), limit=1, state=state)[0]
+    state.close()
+
+    assert result["open_verification_status"] == "VERIFIED_OPEN"
+    assert result["detail_source_resolution_status"] == "RESOLVED_SEARCH_RECOVERY"
+    assert calls.count(canonical_url) == 3
+    assert any("extendedsearch" in url for url in calls)
+
+
+def test_unproven_direct_404_does_not_add_duplicate_same_url_retry(monkeypatch) -> None:
+    card = _verification_card()
+    stale_url = "https://zakupki.gov.ru/epz/order/notice/stale/view/common-info.html?regNumber=" + PROCUREMENT_NUMBER
+    recovered_url = "https://zakupki.gov.ru/epz/order/notice/ea20/view/common-info.html?regNumber=" + PROCUREMENT_NUMBER
+    card.source_url = stale_url
+    calls = []
+
+    def fake_get(url: str, **_kwargs):
+        calls.append(url)
+        if url == stale_url:
+            return DetailResponse(404, "<html>404 Not Found</html>", url)
+        if "extendedsearch" in url:
+            return DetailResponse(200, f'<html><a href="/epz/order/notice/ea20/view/common-info.html?regNumber={PROCUREMENT_NUMBER}">detail</a></html>', url)
+        if url == recovered_url:
+            return DetailResponse(200, _detail(), url)
+        return DetailResponse(404, "<html>404 Not Found</html>", url)
+
+    monkeypatch.setattr(http, "get", fake_get)
+
+    result = verify_cards_from_detail([card], _as_of(), limit=1)[0]
+
+    assert result["open_verification_status"] == "VERIFIED_OPEN"
+    assert result["detail_source_resolution_status"] == "RESOLVED_SEARCH_RECOVERY"
+    assert calls.count(stale_url) == 2
+
+
+def test_223_proven_canonical_retry_does_not_request_44fz(monkeypatch, tmp_path) -> None:
+    db = tmp_path / "radar.db"
+    canonical_url = "https://zakupki.gov.ru/223/purchase/common-info.html?regNumber=" + PROCUREMENT_NUMBER
+    card = _verification_card()
+    card.source_url = canonical_url
+    state = RadarState(db)
+    state.save_successful_source_url(
+        procurement_number=PROCUREMENT_NUMBER,
+        source_url=canonical_url,
+        fetched_at=datetime.now().astimezone().isoformat(timespec="seconds"),
+        latest_known_validation_status="VERIFIED_OPEN",
+    )
+    state.close()
+    calls = []
+
+    def fake_get(url: str, **_kwargs):
+        calls.append(url)
+        if url == canonical_url and len(calls) == 1:
+            return DetailResponse(503, "<html>Service Unavailable</html>", url)
+        if url == canonical_url:
+            return DetailResponse(200, _detail(), url)
+        raise AssertionError(f"unexpected network request: {url}")
+
+    monkeypatch.setattr(http, "get", fake_get)
+    state = RadarState(db)
+    result = verify_cards_from_detail([card], _as_of(), limit=1, state=state)[0]
+    state.close()
+
+    assert result["open_verification_status"] == "VERIFIED_OPEN"
+    assert result["detail_source_strategy"] == "PROVEN_CANONICAL_RETRY"
+    assert all("/epz/order/notice/" not in url for url in calls)
+
+
+def test_proven_canonical_identity_mismatch_retry_continues_recovery(monkeypatch, tmp_path) -> None:
+    db = tmp_path / "radar.db"
+    canonical_url = "https://zakupki.gov.ru/epz/order/notice/stale/view/common-info.html?regNumber=" + PROCUREMENT_NUMBER
+    recovered_url = "https://zakupki.gov.ru/epz/order/notice/ea20/view/common-info.html?regNumber=" + PROCUREMENT_NUMBER
+    card = _verification_card()
+    card.source_url = canonical_url
+    state = RadarState(db)
+    state.save_successful_source_url(
+        procurement_number=PROCUREMENT_NUMBER,
+        source_url=canonical_url,
+        fetched_at=datetime.now().astimezone().isoformat(timespec="seconds"),
+        latest_known_validation_status="VERIFIED_OPEN",
+    )
+    state.close()
+    calls = []
+
+    def fake_get(url: str, **_kwargs):
+        calls.append(url)
+        if url == canonical_url and len(calls) == 1:
+            return DetailResponse(404, "<html>404 Not Found</html>", url)
+        if url == canonical_url and len(calls) == 2:
+            return DetailResponse(200, _detail(number=OTHER_PROCUREMENT_NUMBER), url)
+        if url == canonical_url:
+            return DetailResponse(404, "<html>404 Not Found</html>", url)
+        if "extendedsearch" in url:
+            return DetailResponse(200, f'<html><a href="/epz/order/notice/ea20/view/common-info.html?regNumber={PROCUREMENT_NUMBER}">detail</a></html>', url)
+        if url == recovered_url:
+            return DetailResponse(200, _detail(), url)
+        return DetailResponse(404, "<html>404 Not Found</html>", url)
+
+    monkeypatch.setattr(http, "get", fake_get)
+    state = RadarState(db)
+    result = verify_cards_from_detail([card], _as_of(), limit=1, state=state)[0]
+    state.close()
+
+    assert result["open_verification_status"] == "VERIFIED_OPEN"
+    assert result["detail_source_resolution_status"] == "RESOLVED_SEARCH_RECOVERY"
+    assert any("extendedsearch" in url for url in calls)
+
+
 def test_public_verification_row_redacts_last_known_good_url(monkeypatch, tmp_path) -> None:
     db = tmp_path / "radar.db"
     stale_url = "https://zakupki.gov.ru/epz/order/notice/stale/view/common-info.html?regNumber=" + PROCUREMENT_NUMBER

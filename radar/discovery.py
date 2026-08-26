@@ -138,6 +138,14 @@ def _should_try_source_recovery(strategy: str, status_code: int | None = None) -
     return status_code is None or status_code in {404, 429, 500, 502, 503, 504}
 
 
+def _recovery_status_for_strategy(strategy: str) -> str:
+    if strategy == "LAST_KNOWN_GOOD":
+        return "REUSED"
+    if strategy == "PROVEN_CANONICAL_RETRY":
+        return "RETRIED"
+    return "NOT_ATTEMPTED"
+
+
 def _fetch_detail_url(card: RadarCard, as_of: datetime, url: str, strategy: str) -> tuple[dict[str, Any], bool]:
     import requests
 
@@ -163,7 +171,7 @@ def _fetch_detail_url(card: RadarCard, as_of: datetime, url: str, strategy: str)
         as_of,
         source_url=getattr(response, "url", "") or url,
         http_status=response.status_code,
-        recovery_status="REUSED" if strategy == "LAST_KNOWN_GOOD" else "NOT_ATTEMPTED",
+        recovery_status=_recovery_status_for_strategy(strategy),
         strategy=strategy,
     )
     return row, False
@@ -218,7 +226,16 @@ def verify_cards_from_detail(cards: list[RadarCard], as_of: datetime, limit: int
         direct_transient_failure = direct_failure_code == "REQUEST_ERROR" or (
             direct_failure_code == "HTTP_ERROR" and direct_http_status in {429, 500, 502, 503, 504}
         )
-        if remembered_url and remembered_url != card.source_url:
+        if remembered_url == card.source_url:
+            retry_row, _retry_should_recover = _fetch_detail_url(card, as_of, card.source_url, "PROVEN_CANONICAL_RETRY")
+            retry_row["detail_proven_canonical_retry_count"] = 1
+            if retry_row.get("_detail_last_known_good_url"):
+                retry_row["detail_last_known_good_url"] = _redact_detail_source_url(str(retry_row["_detail_last_known_good_url"]))
+            if retry_row.get("open_verification_status") != "DETAIL_UNAVAILABLE":
+                _persist_last_known_good(state, retry_row, as_of)
+                results.append(_public_verification_row(retry_row))
+                continue
+        elif remembered_url:
             remembered_row, remembered_should_recover = _fetch_detail_url(card, as_of, remembered_url, "LAST_KNOWN_GOOD")
             if remembered_row.get("_detail_last_known_good_url"):
                 remembered_row["detail_last_known_good_url"] = _redact_detail_source_url(str(remembered_row["_detail_last_known_good_url"]))
