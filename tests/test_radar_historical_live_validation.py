@@ -19,6 +19,7 @@ from radar.historical_live_validation import (
     validate_source_values,
 )
 from radar.models import EligibilityStatus, HistoricalAnalog, RadarAssessment, RadarDecision
+import radar.runner as runner
 from radar.runner import run
 
 
@@ -203,6 +204,55 @@ def test_diagnostics_contain_no_secrets(tmp_path: Path) -> None:
 def test_runner_cli_rejects_completed_source_without_history_only() -> None:
     with pytest.raises(ValueError):
         run(["--allow-completed-source", "--procurement-number", "0122300036525000031", "--dry-run"])
+
+
+def test_runner_history_only_closes_radar_state(monkeypatch, tmp_path: Path) -> None:
+    config = RadarConfig()
+    config.radar.database = str(tmp_path / "radar.db")
+    config.radar.output_dir = str(tmp_path / "out")
+    config.discovery.verify_open_status_from_detail_page = True
+    closed: list[str] = []
+
+    class TrackingState:
+        def __init__(self, path) -> None:
+            self.path = str(path)
+
+        def __enter__(self):
+            return self
+
+        def __exit__(self, exc_type, exc_value, traceback) -> None:
+            self.close()
+
+        def close(self) -> None:
+            closed.append(self.path)
+
+        def preview_flags(self, cards):
+            return {card.procurement_number: (True, False) for card in cards}
+
+        def save_run(self, **_kwargs):
+            return {}
+
+        def save_alert_history(self, *_args, **_kwargs):
+            return []
+
+    monkeypatch.setattr(runner, "RadarState", TrackingState)
+    monkeypatch.setattr(runner, "run_historical_for_cards", lambda *_args, **_kwargs: ([], {}))
+    monkeypatch.setattr(runner, "build_alert_feed", lambda *_args, **_kwargs: [])
+    monkeypatch.setattr(runner, "deliver_alert_feed", lambda *_args, **_kwargs: [])
+    monkeypatch.setattr(runner, "write_reports", lambda **_kwargs: {})
+    args = runner.parse_args(
+        [
+            "--history-only",
+            "--procurement-number",
+            "0122300036525000031",
+            "--no-enrich",
+        ]
+    )
+
+    code = runner._run_pipeline(args, config, [], runner.parse_as_of(None, config.radar.timezone), runner.parse_as_of(None, config.radar.timezone), "run", False)
+
+    assert code == 0
+    assert closed == [config.radar.database]
 
 
 def test_strict_existing_procurement_regression_unchanged() -> None:

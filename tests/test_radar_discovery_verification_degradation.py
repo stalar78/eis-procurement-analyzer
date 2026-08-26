@@ -37,7 +37,7 @@ def _run_with_cards(monkeypatch, raw_cards, verifications, limit: int = 20):
         return [normalize_card(card, profile=request.source_profile, query=request.query_text) for card in raw_cards]
 
     monkeypatch.setattr(discovery, "_collect_with_existing_collector", fake_collect)
-    monkeypatch.setattr(discovery, "verify_cards_from_detail", lambda cards, as_of, limit: verifications)
+    monkeypatch.setattr(discovery, "verify_cards_from_detail", lambda cards, as_of, limit, state=None: verifications)
     monkeypatch.setattr(
         discovery,
         "is_provisionally_open",

@@ -4,6 +4,7 @@ import argparse
 import math
 import sqlite3
 import sys
+from contextlib import ExitStack
 from datetime import datetime
 from pathlib import Path
 
@@ -510,295 +511,298 @@ def run(argv: list[str] | None = None) -> int:
 
 
 def _run_pipeline(args: argparse.Namespace, config, profiles, as_of: datetime, started_at: datetime, run_id: str, stale_lock_recovered: bool) -> int:
-    if args.enrichment_only:
-        if not args.offline_input:
-            raise ValueError("--enrichment-only currently requires --offline-input for card context")
-    explicit_queries = list(args.query)
-    if args.query_file:
-        explicit_queries.extend(
-            [
-                line.strip()
-                for line in Path(args.query_file).read_text(encoding="utf-8").splitlines()
-                if line.strip() and not line.strip().startswith("#")
-            ]
-        )
-    source_resolution_diagnostics = None
-    source_resolution_result = None
-    if args.history_only and args.procurement_number and args.offline_input is None:
-        if args.allow_completed_source:
-            source_resolution_result = resolve_procurement_source(
-                args.procurement_number[0],
-                source_url=args.source_url,
-                output_dir=config.radar.output_dir,
+    with ExitStack() as stack:
+        if args.enrichment_only:
+            if not args.offline_input:
+                raise ValueError("--enrichment-only currently requires --offline-input for card context")
+        explicit_queries = list(args.query)
+        if args.query_file:
+            explicit_queries.extend(
+                [
+                    line.strip()
+                    for line in Path(args.query_file).read_text(encoding="utf-8").splitlines()
+                    if line.strip() and not line.strip().startswith("#")
+                ]
             )
-            source_card = source_resolution_result.source_card or RadarCard(
-                procurement_number=args.procurement_number[0],
-                source_url=source_resolution_result.canonical_url or args.source_url or "",
-                status_normalized="COMPLETED",
-            )
-            source_resolution_diagnostics = source_resolution_result.to_dict()
-            source_card.discovered_at = started_at.isoformat(timespec="seconds")
-            source_card.last_seen_at = started_at.isoformat(timespec="seconds")
-            cards = [source_card]
-        else:
-            cards = [
-                RadarCard(
-                    procurement_number=number,
-                    source_url=args.source_url or "",
-                    discovered_at=started_at.isoformat(timespec="seconds"),
-                    last_seen_at=started_at.isoformat(timespec="seconds"),
+        source_resolution_diagnostics = None
+        source_resolution_result = None
+        discovery_state = None
+        if args.history_only and args.procurement_number and args.offline_input is None:
+            if args.allow_completed_source:
+                source_resolution_result = resolve_procurement_source(
+                    args.procurement_number[0],
+                    source_url=args.source_url,
+                    output_dir=config.radar.output_dir,
                 )
-                for number in args.procurement_number
-            ]
-        diagnostics = {"mode": "history-only", "discovery_mode": "OFFLINE", "raw_cards": len(cards), "unique_cards": len(cards), "errors": [], "search_diagnostics": [], "status_audit": [], "open_verifications": []}
-        if source_resolution_diagnostics:
-            diagnostics["source_resolution"] = source_resolution_diagnostics
-    else:
-        cards, diagnostics = discover_cards(
-            config=config,
-            profiles=profiles,
-            offline_input=args.offline_input,
-            limit=args.limit,
-            max_pages=args.max_pages,
-            as_of=as_of,
-            discovery_mode=args.discovery_mode,
-            explicit_queries=explicit_queries or None,
-        )
-    diagnostics["diagnose_search"] = args.diagnose_search
-    diagnostics["status_audit_requested"] = args.status_audit
-    diagnostics["dry_run"] = args.dry_run
-    diagnostics["force_refresh"] = args.force_refresh
-    diagnostics["recurring"] = bool(args.recurring)
-    diagnostics["stale_lock_recovered"] = stale_lock_recovered
-
-    state = None
-    if args.dry_run and not Path(config.radar.database).exists():
-        flags = {card.procurement_number: (True, False) for card in cards}
-    else:
-        state = RadarState(config.radar.database)
-        flags = state.preview_flags(cards)
-    assessments = []
-    for card in cards:
-        eligibility, days_left, eligibility_reasons = evaluate_eligibility(card, as_of, config, profiles)
-        is_new, is_changed = flags.get(card.procurement_number, (True, False))
-        assessments.append(
-            assess_card(
-                card,
-                eligibility,
-                days_left,
-                config,
-                profiles,
-                is_new=is_new,
-                is_changed=is_changed,
-                eligibility_reasons=eligibility_reasons,
-            )
-        )
-
-    historical_bundles = []
-    opportunities = []
-    opportunity_result = None
-    live_validation_result = None
-    if config.historical.enabled or args.history_only:
-        if args.allow_completed_source:
-            for assessment in assessments:
-                exclude_validation_source_from_active_assessment(assessment)
-            live_validation_result = run_live_historical_validation(
-                cards[0],
-                assessments[0],
-                config,
-                output_dir=Path(config.radar.output_dir),
-                dry_run=args.dry_run,
-                resume=args.resume_history,
-                source_resolution=source_resolution_result,
-            )
-            historical_bundles = [live_validation_result.bundle]
-            historical_diagnostics = dict(live_validation_result.diagnostics)
-            historical_diagnostics["historical_live_validation"] = live_validation_result.to_dict()
+                source_card = source_resolution_result.source_card or RadarCard(
+                    procurement_number=args.procurement_number[0],
+                    source_url=source_resolution_result.canonical_url or args.source_url or "",
+                    status_normalized="COMPLETED",
+                )
+                source_resolution_diagnostics = source_resolution_result.to_dict()
+                source_card.discovered_at = started_at.isoformat(timespec="seconds")
+                source_card.last_seen_at = started_at.isoformat(timespec="seconds")
+                cards = [source_card]
+            else:
+                cards = [
+                    RadarCard(
+                        procurement_number=number,
+                        source_url=args.source_url or "",
+                        discovered_at=started_at.isoformat(timespec="seconds"),
+                        last_seen_at=started_at.isoformat(timespec="seconds"),
+                    )
+                    for number in args.procurement_number
+                ]
+            diagnostics = {"mode": "history-only", "discovery_mode": "OFFLINE", "raw_cards": len(cards), "unique_cards": len(cards), "errors": [], "search_diagnostics": [], "status_audit": [], "open_verifications": []}
+            if source_resolution_diagnostics:
+                diagnostics["source_resolution"] = source_resolution_diagnostics
         else:
-            historical_bundles, historical_diagnostics = run_historical_for_cards(
+            if not args.dry_run and config.discovery.verify_open_status_from_detail_page:
+                discovery_state = stack.enter_context(RadarState(config.radar.database))
+            cards, diagnostics = discover_cards(
+                config=config,
+                profiles=profiles,
+                offline_input=args.offline_input,
+                limit=args.limit,
+                max_pages=args.max_pages,
+                as_of=as_of,
+                discovery_mode=args.discovery_mode,
+                explicit_queries=explicit_queries or None,
+                state=discovery_state,
+            )
+        diagnostics["diagnose_search"] = args.diagnose_search
+        diagnostics["status_audit_requested"] = args.status_audit
+        diagnostics["dry_run"] = args.dry_run
+        diagnostics["force_refresh"] = args.force_refresh
+        diagnostics["recurring"] = bool(args.recurring)
+        diagnostics["stale_lock_recovered"] = stale_lock_recovered
+
+        state = None
+        if args.dry_run and not Path(config.radar.database).exists():
+            flags = {card.procurement_number: (True, False) for card in cards}
+        else:
+            state = stack.enter_context(RadarState(config.radar.database))
+            flags = state.preview_flags(cards)
+        assessments = []
+        for card in cards:
+            eligibility, days_left, eligibility_reasons = evaluate_eligibility(card, as_of, config, profiles)
+            is_new, is_changed = flags.get(card.procurement_number, (True, False))
+            assessments.append(
+                assess_card(
+                    card,
+                    eligibility,
+                    days_left,
+                    config,
+                    profiles,
+                    is_new=is_new,
+                    is_changed=is_changed,
+                    eligibility_reasons=eligibility_reasons,
+                )
+            )
+
+        historical_bundles = []
+        opportunities = []
+        opportunity_result = None
+        live_validation_result = None
+        if config.historical.enabled or args.history_only:
+            if args.allow_completed_source:
+                for assessment in assessments:
+                    exclude_validation_source_from_active_assessment(assessment)
+                live_validation_result = run_live_historical_validation(
+                    cards[0],
+                    assessments[0],
+                    config,
+                    output_dir=Path(config.radar.output_dir),
+                    dry_run=args.dry_run,
+                    resume=args.resume_history,
+                    source_resolution=source_resolution_result,
+                )
+                historical_bundles = [live_validation_result.bundle]
+                historical_diagnostics = dict(live_validation_result.diagnostics)
+                historical_diagnostics["historical_live_validation"] = live_validation_result.to_dict()
+            else:
+                historical_bundles, historical_diagnostics = run_historical_for_cards(
+                    cards,
+                    assessments,
+                    config,
+                    offline_history_input=args.offline_history_input,
+                    history_limit=args.history_limit,
+                )
+            diagnostics.update(historical_diagnostics)
+            diagnostics["historical"] = [bundle.to_dict() for bundle in historical_bundles]
+            diagnostics["historical_enabled"] = True
+        else:
+            diagnostics["historical_enabled"] = False
+
+        failure_history_live_results = []
+        if (config.opportunities.enabled or args.failure_history_only) and cards:
+            previous_opportunities = {}
+            if state is not None:
+                previous_opportunities = {
+                    card.procurement_number: stored
+                    for card in cards
+                    if (stored := state.get_opportunity(card.procurement_number)) is not None
+                }
+            opportunity_result = assess_failed_opportunities(
                 cards,
                 assessments,
                 config,
-                offline_history_input=args.offline_history_input,
-                history_limit=args.history_limit,
-            )
-        diagnostics.update(historical_diagnostics)
-        diagnostics["historical"] = [bundle.to_dict() for bundle in historical_bundles]
-        diagnostics["historical_enabled"] = True
-    else:
-        diagnostics["historical_enabled"] = False
-
-    failure_history_live_results = []
-    if (config.opportunities.enabled or args.failure_history_only) and cards:
-        previous_opportunities = {}
-        if state is not None:
-            previous_opportunities = {
-                card.procurement_number: stored
-                for card in cards
-                if (stored := state.get_opportunity(card.procurement_number)) is not None
-            }
-        opportunity_result = assess_failed_opportunities(
-            cards,
-            assessments,
-            config,
-            offline_failure_input=args.offline_failure_input,
-            previous_opportunities=previous_opportunities,
-        )
-        opportunities = opportunity_result.opportunities
-        diagnostics["opportunities"] = opportunity_result.to_dict()
-    elif config.opportunities.enabled or args.failure_history_only:
-        diagnostics["failed_opportunity_fallback_reason"] = "NO_CURRENT_OPEN_CARDS_AFTER_ACTIVE_VERIFICATION"
-        fallback_card = next((card for card in cards if card.status_normalized == "COMPLETED"), None) or (cards[0] if cards else None)
-        if fallback_card is None:
-            fallback_query = ""
-            if diagnostics.get("search_diagnostics"):
-                fallback_query = diagnostics["search_diagnostics"][0].get("query", "")
-            if not fallback_query and explicit_queries:
-                fallback_query = explicit_queries[0]
-            if not fallback_query and profiles:
-                fallback_query = profiles[0].queries[0] if profiles[0].queries else ""
-            fallback_card = RadarCard(
-                procurement_number="R3B1_HISTORICAL_SEED",
-                title=fallback_query,
-                customer="",
-                law="",
-                published_at=started_at.isoformat(timespec="seconds"),
-                status_normalized="COMPLETED",
-                raw_text=fallback_query,
-            )
-        fallback_assessment = next((assessment for assessment in assessments if assessment.procurement_number == getattr(fallback_card, "procurement_number", "")), None)
-        if fallback_assessment is None:
-            fallback_assessment = RadarAssessment(
-                procurement_number=fallback_card.procurement_number,
-                eligibility_status=EligibilityStatus.CLOSED,
-                days_to_deadline=None,
-                total_score=0,
-                radar_decision=RadarDecision.INSUFFICIENT_DATA,
-            )
-        if fallback_card is not None and fallback_assessment is not None:
-            fallback = assess_failure_history(
-                fallback_card,
-                fallback_assessment,
-                config,
-                as_of=as_of,
                 offline_failure_input=args.offline_failure_input,
+                previous_opportunities=previous_opportunities,
             )
-            failure_history_live_results.append(fallback)
-            diagnostics["failure_discovery"] = fallback.to_dict()
+            opportunities = opportunity_result.opportunities
+            diagnostics["opportunities"] = opportunity_result.to_dict()
+        elif config.opportunities.enabled or args.failure_history_only:
+            diagnostics["failed_opportunity_fallback_reason"] = "NO_CURRENT_OPEN_CARDS_AFTER_ACTIVE_VERIFICATION"
+            fallback_card = next((card for card in cards if card.status_normalized == "COMPLETED"), None) or (cards[0] if cards else None)
+            if fallback_card is None:
+                fallback_query = ""
+                if diagnostics.get("search_diagnostics"):
+                    fallback_query = diagnostics["search_diagnostics"][0].get("query", "")
+                if not fallback_query and explicit_queries:
+                    fallback_query = explicit_queries[0]
+                if not fallback_query and profiles:
+                    fallback_query = profiles[0].queries[0] if profiles[0].queries else ""
+                fallback_card = RadarCard(
+                    procurement_number="R3B1_HISTORICAL_SEED",
+                    title=fallback_query,
+                    customer="",
+                    law="",
+                    published_at=started_at.isoformat(timespec="seconds"),
+                    status_normalized="COMPLETED",
+                    raw_text=fallback_query,
+                )
+            fallback_assessment = next((assessment for assessment in assessments if assessment.procurement_number == getattr(fallback_card, "procurement_number", "")), None)
+            if fallback_assessment is None:
+                fallback_assessment = RadarAssessment(
+                    procurement_number=fallback_card.procurement_number,
+                    eligibility_status=EligibilityStatus.CLOSED,
+                    days_to_deadline=None,
+                    total_score=0,
+                    radar_decision=RadarDecision.INSUFFICIENT_DATA,
+                )
+            if fallback_card is not None and fallback_assessment is not None:
+                fallback = assess_failure_history(
+                    fallback_card,
+                    fallback_assessment,
+                    config,
+                    as_of=as_of,
+                    offline_failure_input=args.offline_failure_input,
+                )
+                failure_history_live_results.append(fallback)
+                diagnostics["failure_discovery"] = fallback.to_dict()
 
-    finished_at = datetime.now(as_of.tzinfo)
-    enrichment_result = None
-    should_enrich = (args.enrich or args.enrichment_only) and not args.no_enrich and not args.history_only
-    if should_enrich:
-        decisions = args.enrich_decisions.split(",") if args.enrich_decisions else None
-        enrichment_result = run_enrichment(
-            cards,
-            assessments,
-            config,
-            state=state,
-            offline_enrichment_input=args.offline_enrichment_input,
-            download_dir=args.download_dir,
-            analysis_dir=args.analysis_dir,
-            dry_run=args.dry_run,
-            skip_download=args.skip_download,
-            skip_analysis=args.skip_analysis,
-            refresh_enrichment=args.refresh_enrichment,
-            decisions=decisions,
-            total_limit=args.enrich_limit,
-            priority_limit=args.priority_enrich_limit,
-            review_limit=args.review_enrich_limit,
-            procurement_numbers=args.procurement_number,
-            source_url=args.source_url,
-            force_enrich=args.force_enrich,
-        )
-        diagnostics.update(enrichment_result.diagnostics)
-        diagnostics["enrichment_plan"] = enrichment_result.plan.to_dict()
+        finished_at = datetime.now(as_of.tzinfo)
+        enrichment_result = None
+        should_enrich = (args.enrich or args.enrichment_only) and not args.no_enrich and not args.history_only
+        if should_enrich:
+            decisions = args.enrich_decisions.split(",") if args.enrich_decisions else None
+            enrichment_result = run_enrichment(
+                cards,
+                assessments,
+                config,
+                state=state,
+                offline_enrichment_input=args.offline_enrichment_input,
+                download_dir=args.download_dir,
+                analysis_dir=args.analysis_dir,
+                dry_run=args.dry_run,
+                skip_download=args.skip_download,
+                skip_analysis=args.skip_analysis,
+                refresh_enrichment=args.refresh_enrichment,
+                decisions=decisions,
+                total_limit=args.enrich_limit,
+                priority_limit=args.priority_enrich_limit,
+                review_limit=args.review_enrich_limit,
+                procurement_numbers=args.procurement_number,
+                source_url=args.source_url,
+                force_enrich=args.force_enrich,
+            )
+            diagnostics.update(enrichment_result.diagnostics)
+            diagnostics["enrichment_plan"] = enrichment_result.plan.to_dict()
 
-    if not args.dry_run:
-        if state is None:
-            state = RadarState(config.radar.database)
-        state_info = state.save_run(
+        if not args.dry_run:
+            if state is None:
+                state = stack.enter_context(RadarState(config.radar.database))
+            state_info = state.save_run(
+                run_id=run_id,
+                started_at=started_at.isoformat(timespec="seconds"),
+                finished_at=finished_at.isoformat(timespec="seconds"),
+                as_of=as_of.isoformat(timespec="seconds"),
+                radar_version=radar_version,
+                diagnostics=diagnostics,
+                cards=cards,
+                assessments=assessments,
+                historical_bundles=historical_bundles,
+            )
+            diagnostics.update(state_info)
+            if opportunity_result is not None:
+                from radar import opportunity_intelligence_version
+
+                opportunity_change_feed = state.save_opportunity_assessment(
+                    algorithm_version=opportunity_intelligence_version,
+                    failure_events=opportunity_result.failure_events,
+                    republication_links=opportunity_result.republication_links,
+                    opportunities=opportunities,
+                    transitions=opportunity_result.transitions,
+                    detected_at=finished_at.isoformat(timespec="seconds"),
+                    active_procurement_numbers=[card.procurement_number for card in cards],
+                )
+                diagnostics.setdefault("change_feed", []).extend(opportunity_change_feed)
+            alert_feed = build_alert_feed(
+                diagnostics.get("change_feed", []),
+                cards,
+                assessments,
+                config,
+                as_of,
+            )
+            diagnostics["alert_feed"] = state.save_alert_history(run_id, alert_feed)
+            diagnostics["telegram_delivery"] = deliver_alert_feed(
+                diagnostics["alert_feed"],
+                config.telegram,
+                state,
+                run_id=run_id,
+            )
+            if enrichment_result is not None:
+                state.save_enrichment_run(
+                    enrichment_run_id=f"enrich_{run_id}",
+                    radar_run_id=run_id,
+                    started_at=started_at.isoformat(timespec="seconds"),
+                    finished_at=finished_at.isoformat(timespec="seconds"),
+                    requested_limit=args.enrich_limit or config.enrichment.total_limit_per_run,
+                    selected_count=len(enrichment_result.plan.selected),
+                    skipped_count=len(enrichment_result.plan.skipped),
+                    diagnostics=enrichment_result.diagnostics,
+                    config_snapshot=config.enrichment.__dict__,
+                    cards=cards,
+                    deep_assessments=enrichment_result.deep_assessments,
+                    artifacts=enrichment_result.artifacts,
+                )
+        else:
+            diagnostics["state"] = "dry-run: SQLite was not modified"
+
+        report_paths = write_reports(
+            output_dir=Path(config.radar.output_dir),
             run_id=run_id,
-            started_at=started_at.isoformat(timespec="seconds"),
-            finished_at=finished_at.isoformat(timespec="seconds"),
-            as_of=as_of.isoformat(timespec="seconds"),
-            radar_version=radar_version,
+            started_at=started_at,
+            finished_at=finished_at,
+            as_of=as_of,
+            profiles=[profile.name for profile in profiles],
             diagnostics=diagnostics,
             cards=cards,
             assessments=assessments,
             historical_bundles=historical_bundles,
+            deep_assessments=enrichment_result.deep_assessments if enrichment_result else [],
+            opportunities=opportunities,
+            artifacts=enrichment_result.artifacts if enrichment_result else [],
+            enrichment_plan=enrichment_result.plan.to_dict() if enrichment_result else None,
+            dry_run=args.dry_run,
+            publish_blocked=args.publish_blocked and not args.no_publish_blocked,
         )
-        diagnostics.update(state_info)
-        if opportunity_result is not None:
-            from radar import opportunity_intelligence_version
-
-            opportunity_change_feed = state.save_opportunity_assessment(
-                algorithm_version=opportunity_intelligence_version,
-                failure_events=opportunity_result.failure_events,
-                republication_links=opportunity_result.republication_links,
-                opportunities=opportunities,
-                transitions=opportunity_result.transitions,
-                detected_at=finished_at.isoformat(timespec="seconds"),
-                active_procurement_numbers=[card.procurement_number for card in cards],
-            )
-            diagnostics.setdefault("change_feed", []).extend(opportunity_change_feed)
-        alert_feed = build_alert_feed(
-            diagnostics.get("change_feed", []),
-            cards,
-            assessments,
-            config,
-            as_of,
-        )
-        diagnostics["alert_feed"] = state.save_alert_history(run_id, alert_feed)
-        diagnostics["telegram_delivery"] = deliver_alert_feed(
-            diagnostics["alert_feed"],
-            config.telegram,
-            state,
-            run_id=run_id,
-        )
-        if enrichment_result is not None:
-            state.save_enrichment_run(
-                enrichment_run_id=f"enrich_{run_id}",
-                radar_run_id=run_id,
-                started_at=started_at.isoformat(timespec="seconds"),
-                finished_at=finished_at.isoformat(timespec="seconds"),
-                requested_limit=args.enrich_limit or config.enrichment.total_limit_per_run,
-                selected_count=len(enrichment_result.plan.selected),
-                skipped_count=len(enrichment_result.plan.skipped),
-                diagnostics=enrichment_result.diagnostics,
-                config_snapshot=config.enrichment.__dict__,
-                cards=cards,
-                deep_assessments=enrichment_result.deep_assessments,
-                artifacts=enrichment_result.artifacts,
-            )
-    else:
-        diagnostics["state"] = "dry-run: SQLite was not modified"
-    if state is not None:
-        state.close()
-
-    report_paths = write_reports(
-        output_dir=Path(config.radar.output_dir),
-        run_id=run_id,
-        started_at=started_at,
-        finished_at=finished_at,
-        as_of=as_of,
-        profiles=[profile.name for profile in profiles],
-        diagnostics=diagnostics,
-        cards=cards,
-        assessments=assessments,
-        historical_bundles=historical_bundles,
-        deep_assessments=enrichment_result.deep_assessments if enrichment_result else [],
-        opportunities=opportunities,
-        artifacts=enrichment_result.artifacts if enrichment_result else [],
-        enrichment_plan=enrichment_result.plan.to_dict() if enrichment_result else None,
-        dry_run=args.dry_run,
-        publish_blocked=args.publish_blocked and not args.no_publish_blocked,
-    )
-    if args.verbose or args.dry_run:
-        print(f"Radar {radar_version}: {len(cards)} unique cards, reports: {report_paths}")
-        if args.dry_run:
-            print("Dry run: state was not saved and latest.* was not overwritten.")
-    return 0
+        if args.verbose or args.dry_run:
+            print(f"Radar {radar_version}: {len(cards)} unique cards, reports: {report_paths}")
+            if args.dry_run:
+                print("Dry run: state was not saved and latest.* was not overwritten.")
+        return 0
 
 
 def main() -> None:

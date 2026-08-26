@@ -68,6 +68,12 @@ class RadarState:
     def close(self) -> None:
         self.connection.close()
 
+    def __enter__(self) -> "RadarState":
+        return self
+
+    def __exit__(self, exc_type, exc_value, traceback) -> None:
+        self.close()
+
     def initialize(self) -> None:
         cur = self.connection.cursor()
         cur.execute(
@@ -509,6 +515,70 @@ class RadarState:
             "SELECT * FROM recurring_run_lifecycle WHERE run_id = ? ORDER BY id DESC LIMIT 1",
             (run_id,),
         ).fetchone()
+
+    def get_last_successful_source_url(self, procurement_number: str, max_age_hours: int | None = None) -> str:
+        row = self.connection.execute(
+            """
+            SELECT last_successful_source_url, last_successful_fetch_time
+            FROM source_snapshots
+            WHERE procurement_number = ?
+            """,
+            (procurement_number,),
+        ).fetchone()
+        if not row:
+            return ""
+        if max_age_hours is not None and row["last_successful_fetch_time"]:
+            try:
+                from datetime import datetime
+
+                fetched_at = datetime.fromisoformat(str(row["last_successful_fetch_time"]))
+                now = datetime.now(fetched_at.tzinfo)
+                age_hours = (now - fetched_at).total_seconds() / 3600
+                if age_hours > max_age_hours:
+                    return ""
+            except Exception:
+                return ""
+        return str(row["last_successful_source_url"] or "")
+
+    def save_successful_source_url(
+        self,
+        *,
+        procurement_number: str,
+        source_url: str,
+        page_type: str = "",
+        fetched_at: str = "",
+        content_fingerprint: str = "",
+        latest_known_validation_status: str = "",
+    ) -> None:
+        self.connection.execute(
+            """
+            INSERT INTO source_snapshots
+            (
+                procurement_number,
+                last_successful_source_url,
+                source_page_type,
+                last_successful_fetch_time,
+                content_fingerprint,
+                latest_known_validation_status
+            )
+            VALUES (?, ?, ?, ?, ?, ?)
+            ON CONFLICT(procurement_number) DO UPDATE SET
+                last_successful_source_url = excluded.last_successful_source_url,
+                source_page_type = excluded.source_page_type,
+                last_successful_fetch_time = excluded.last_successful_fetch_time,
+                content_fingerprint = excluded.content_fingerprint,
+                latest_known_validation_status = excluded.latest_known_validation_status
+            """,
+            (
+                procurement_number,
+                source_url,
+                page_type,
+                fetched_at,
+                content_fingerprint,
+                latest_known_validation_status,
+            ),
+        )
+        self.connection.commit()
 
     def get_alert_fingerprint(self, fingerprint: str) -> sqlite3.Row | None:
         return self.connection.execute(

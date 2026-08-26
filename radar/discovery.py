@@ -7,6 +7,7 @@ from collections import Counter
 from datetime import datetime
 from pathlib import Path
 from typing import Any
+from urllib.parse import parse_qsl, urlencode, urlparse, urlunparse
 
 from radar.config import RadarConfig
 from radar import http
@@ -15,6 +16,21 @@ from radar.open_verification import build_status_audit, is_provisionally_open, u
 from radar.prefilter import days_to_deadline, normalize_status, parse_datetime
 from radar.search_request import SearchRequest, build_eis_search_request, redact_url, request_from_url, serialize_eis_search_request
 from radar.search_profiles import SearchProfile
+
+
+def _redact_detail_source_url(url: str) -> str:
+    redacted = redact_url(url)
+    parsed = urlparse(redacted)
+    params = parse_qsl(parsed.query, keep_blank_values=True)
+    if not params:
+        return redacted
+    safe_params = []
+    for key, value in params:
+        if key.lower() in {"regnumber", "registrynumber", "noticenumber", "purchasenoticenumber"}:
+            safe_params.append((key, "<redacted>"))
+        else:
+            safe_params.append((key, value))
+    return urlunparse(parsed._replace(query=urlencode(safe_params, doseq=True)))
 
 
 def normalize_law(value: str) -> str:
@@ -90,8 +106,89 @@ def load_offline_cards(path: str | Path) -> list[RadarCard]:
     return deduplicate_cards([normalize_card(item) for item in items])
 
 
-def verify_cards_from_detail(cards: list[RadarCard], as_of: datetime, limit: int) -> list[dict[str, Any]]:
+def _verify_detail_content(
+    card: RadarCard,
+    content: str,
+    as_of: datetime,
+    *,
+    source_url: str,
+    http_status: int | None,
+    recovery_status: str,
+    strategy: str,
+) -> dict[str, Any]:
+    from radar.source_resolution import content_has_number, fingerprint_content, page_type_for_url
+
+    verification = verify_open_from_detail_text(card, content, as_of)
+    row = verification.to_dict()
+    row["detail_source_url"] = _redact_detail_source_url(source_url)
+    row["detail_direct_http_status"] = http_status
+    row["detail_source_recovery_status"] = recovery_status
+    row["detail_source_strategy"] = strategy
+    if row.get("open_verification_status") != "DETAIL_UNAVAILABLE" and content_has_number(content, card.procurement_number):
+        row["_detail_last_known_good_url"] = source_url
+        row["detail_last_known_good_url"] = _redact_detail_source_url(source_url)
+        row["detail_last_known_good_page_type"] = page_type_for_url(source_url)
+        row["detail_last_known_good_fingerprint"] = fingerprint_content(content)
+    return row
+
+
+def _should_try_source_recovery(strategy: str, status_code: int | None = None) -> bool:
+    if strategy != "DIRECT":
+        return False
+    return status_code is None or status_code in {404, 429, 500, 502, 503, 504}
+
+
+def _fetch_detail_url(card: RadarCard, as_of: datetime, url: str, strategy: str) -> tuple[dict[str, Any], bool]:
     import requests
+
+    try:
+        response = http.get(url, timeout=30)
+    except requests.RequestException:
+        unavailable = unavailable_verification(card, "detail request failed", as_of, "REQUEST_ERROR").to_dict()
+        unavailable["detail_source_strategy"] = strategy
+        unavailable["detail_source_recovery_status"] = "FAILED" if strategy == "LAST_KNOWN_GOOD" else "NOT_ATTEMPTED"
+        unavailable["detail_source_url"] = _redact_detail_source_url(url)
+        return unavailable, _should_try_source_recovery(strategy)
+    if response.status_code >= 400:
+        code = "SOURCE_URL_NOT_FOUND" if response.status_code == 404 and strategy == "LAST_KNOWN_GOOD" else "HTTP_ERROR"
+        unavailable = unavailable_verification(card, f"HTTP {response.status_code}", as_of, code).to_dict()
+        unavailable["detail_source_url"] = _redact_detail_source_url(getattr(response, "url", "") or url)
+        unavailable["detail_direct_http_status"] = response.status_code
+        unavailable["detail_source_recovery_status"] = "FAILED" if strategy == "LAST_KNOWN_GOOD" else "NOT_ATTEMPTED"
+        unavailable["detail_source_strategy"] = strategy
+        return unavailable, _should_try_source_recovery(strategy, response.status_code)
+    row = _verify_detail_content(
+        card,
+        response.text,
+        as_of,
+        source_url=getattr(response, "url", "") or url,
+        http_status=response.status_code,
+        recovery_status="REUSED" if strategy == "LAST_KNOWN_GOOD" else "NOT_ATTEMPTED",
+        strategy=strategy,
+    )
+    return row, False
+
+
+def _persist_last_known_good(state, row: dict[str, Any], as_of: datetime) -> None:
+    if state is None or not row.get("_detail_last_known_good_url"):
+        return
+    state.save_successful_source_url(
+        procurement_number=str(row.get("procurement_number") or ""),
+        source_url=str(row.get("_detail_last_known_good_url") or ""),
+        page_type=str(row.get("detail_last_known_good_page_type") or ""),
+        fetched_at=datetime.now(as_of.tzinfo).isoformat(timespec="seconds"),
+        content_fingerprint=str(row.get("detail_last_known_good_fingerprint") or ""),
+        latest_known_validation_status=str(row.get("open_verification_status") or ""),
+    )
+
+
+def _public_verification_row(row: dict[str, Any]) -> dict[str, Any]:
+    public_row = dict(row)
+    public_row.pop("_detail_last_known_good_url", None)
+    return public_row
+
+
+def verify_cards_from_detail(cards: list[RadarCard], as_of: datetime, limit: int, state=None, remembered_source_max_age_hours: int = 336) -> list[dict[str, Any]]:
     from radar.source_resolution import (
         SourceResolutionPolicy,
         content_has_number,
@@ -108,52 +205,75 @@ def verify_cards_from_detail(cards: list[RadarCard], as_of: datetime, limit: int
         if not card.source_url:
             results.append(unavailable_verification(card, "missing source URL", as_of, "MISSING_SOURCE_URL").to_dict())
             continue
-        try:
-            response = http.get(card.source_url, timeout=30)
-            if response.status_code == 404:
-                recovery = resolve_procurement_source_content(
-                    card.procurement_number,
-                    source_url=card.source_url,
-                    policy=recovery_policy,
-                )
-                if (
-                    recovery.result.status in {"RESOLVED_LIVE", "RESOLVED_SEARCH_RECOVERY", "RESOLVED_ALTERNATE_SECTION"}
-                    and recovery.content
-                    and content_has_number(recovery.content, card.procurement_number)
-                ):
-                    verification = verify_open_from_detail_text(card, recovery.content, as_of)
-                    row = verification.to_dict()
-                    row["detail_source_url"] = redact_url(getattr(response, "url", "") or card.source_url)
-                    row["detail_direct_http_status"] = response.status_code
-                    row["detail_source_recovery_status"] = "RECOVERED"
-                    row["detail_recovered_url"] = redact_url(recovery.result.canonical_url)
-                    row["detail_source_resolution_status"] = recovery.result.status
-                    row["detail_source_resolution_attempts"] = len(recovery.result.attempts)
-                    results.append(row)
-                    continue
-                failure_code = "SOURCE_URL_NOT_FOUND" if recovery.result.status == "NOT_FOUND_CONFIRMED" else "SOURCE_RECOVERY_FAILED"
-                unavailable = unavailable_verification(card, "source recovery failed", as_of, failure_code).to_dict()
-                unavailable["detail_source_url"] = redact_url(getattr(response, "url", "") or card.source_url)
-                unavailable["detail_direct_http_status"] = response.status_code
-                unavailable["detail_source_recovery_status"] = "FAILED"
-                unavailable["detail_source_resolution_status"] = recovery.result.status
-                unavailable["detail_source_resolution_attempts"] = len(recovery.result.attempts)
-                results.append(unavailable)
+        row, should_recover = _fetch_detail_url(card, as_of, card.source_url, "DIRECT")
+        if row.get("_detail_last_known_good_url"):
+            row["detail_last_known_good_url"] = _redact_detail_source_url(str(row["_detail_last_known_good_url"]))
+        remembered_url = state.get_last_successful_source_url(card.procurement_number, remembered_source_max_age_hours) if state else ""
+        if not should_recover:
+            _persist_last_known_good(state, row, as_of)
+            results.append(_public_verification_row(row))
+            continue
+        direct_failure_code = str(row.get("detail_failure_code") or "")
+        direct_http_status = row.get("detail_direct_http_status")
+        direct_transient_failure = direct_failure_code == "REQUEST_ERROR" or (
+            direct_failure_code == "HTTP_ERROR" and direct_http_status in {429, 500, 502, 503, 504}
+        )
+        if remembered_url and remembered_url != card.source_url:
+            remembered_row, remembered_should_recover = _fetch_detail_url(card, as_of, remembered_url, "LAST_KNOWN_GOOD")
+            if remembered_row.get("_detail_last_known_good_url"):
+                remembered_row["detail_last_known_good_url"] = _redact_detail_source_url(str(remembered_row["_detail_last_known_good_url"]))
+            if remembered_row.get("open_verification_status") != "DETAIL_UNAVAILABLE":
+                _persist_last_known_good(state, remembered_row, as_of)
+                results.append(_public_verification_row(remembered_row))
                 continue
-            if response.status_code >= 400:
-                unavailable = unavailable_verification(card, f"HTTP {response.status_code}", as_of, "HTTP_ERROR").to_dict()
-                unavailable["detail_source_url"] = redact_url(getattr(response, "url", "") or card.source_url)
-                unavailable["detail_direct_http_status"] = response.status_code
-                unavailable["detail_source_recovery_status"] = "NOT_ATTEMPTED"
-                results.append(unavailable)
-                continue
-            row = verify_open_from_detail_text(card, response.text, as_of).to_dict()
-            row["detail_source_url"] = redact_url(getattr(response, "url", "") or card.source_url)
-            row["detail_direct_http_status"] = response.status_code
-            row["detail_source_recovery_status"] = "NOT_ATTEMPTED"
-            results.append(row)
-        except requests.RequestException:
-            results.append(unavailable_verification(card, "detail request failed", as_of, "REQUEST_ERROR").to_dict())
+            if remembered_should_recover:
+                row = remembered_row
+        recovery = resolve_procurement_source_content(
+            card.procurement_number,
+            source_url=card.source_url,
+            policy=recovery_policy,
+        )
+        if (
+            recovery.result.status in {"RESOLVED_LIVE", "RESOLVED_SEARCH_RECOVERY", "RESOLVED_ALTERNATE_SECTION"}
+            and recovery.content
+            and content_has_number(recovery.content, card.procurement_number)
+        ):
+            recovered_url = recovery.result.canonical_url
+            recovered_row = _verify_detail_content(
+                card,
+                recovery.content,
+                as_of,
+                source_url=recovered_url,
+                http_status=None,
+                recovery_status="RECOVERED",
+                strategy=recovery.result.strategy_used or "SEARCH_RECOVERY",
+            )
+            recovered_row["detail_recovered_url"] = _redact_detail_source_url(recovered_url)
+            recovered_row["detail_source_resolution_status"] = recovery.result.status
+            recovered_row["detail_source_resolution_attempts"] = len(recovery.result.attempts)
+            if recovered_row.get("_detail_last_known_good_url"):
+                recovered_row["detail_last_known_good_url"] = _redact_detail_source_url(str(recovered_row["_detail_last_known_good_url"]))
+            _persist_last_known_good(state, recovered_row, as_of)
+            results.append(_public_verification_row(recovered_row))
+            continue
+        if recovery.result.status == "NOT_FOUND_CONFIRMED":
+            failure_code = "SOURCE_URL_NOT_FOUND"
+            failure_reason = "source recovery failed"
+        elif direct_transient_failure:
+            failure_code = direct_failure_code
+            direct_reasons = row.get("open_verification_reasons") or []
+            failure_reason = str(direct_reasons[0]) if direct_reasons else "source recovery failed"
+        else:
+            failure_code = "SOURCE_RECOVERY_FAILED"
+            failure_reason = "source recovery failed"
+        unavailable = unavailable_verification(card, failure_reason, as_of, failure_code).to_dict()
+        unavailable["detail_source_url"] = _redact_detail_source_url(card.source_url)
+        unavailable["detail_direct_http_status"] = row.get("detail_direct_http_status")
+        unavailable["detail_source_recovery_status"] = "FAILED"
+        unavailable["detail_source_strategy"] = "FAILED"
+        unavailable["detail_source_resolution_status"] = recovery.result.status
+        unavailable["detail_source_resolution_attempts"] = len(recovery.result.attempts)
+        results.append(unavailable)
     return results
 
 
@@ -211,6 +331,7 @@ def discover_cards(
     as_of: datetime | None = None,
     discovery_mode: str | None = None,
     explicit_queries: list[str] | None = None,
+    state=None,
 ) -> tuple[list[RadarCard], dict[str, Any]]:
     diagnostics: dict[str, Any] = {
         "queries_attempted": 0,
@@ -325,7 +446,7 @@ def discover_cards(
     if config.discovery.verify_open_status_from_detail_page and unique:
         attempted_cards = unique[: config.discovery.verify_top_candidates_limit]
         verification_skipped_due_to_limit = max(0, len(unique) - len(attempted_cards))
-        verifications = verify_cards_from_detail(unique, now, config.discovery.verify_top_candidates_limit)
+        verifications = verify_cards_from_detail(unique, now, config.discovery.verify_top_candidates_limit, state=state)
         verification_by_number = {
             row["procurement_number"]: row
             for row in verifications
