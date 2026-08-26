@@ -8,10 +8,10 @@ The project is **not** a legal, financial, automated participation, or automated
 
 ## Current status
 
-- Radar version label: `0.5.0-r4g6-health-hardening`
+- Radar version label: `0.6.0-r4h-source-resilience`
 - Historical result extraction version: `0.3.4-r3a-result-extraction`
 - Opportunity intelligence version: `0.3.5-r3b-opportunities`
-- Latest accepted local suite after R4G hardening: `245 passed`
+- Latest accepted local suite after R4H source-resilience hardening: `297 passed`
 - R4A adds an idempotent recurring-run change feed.
 - R4B adds reliable recurring execution with locking, lifecycle persistence, failure isolation, and retention.
 - R4C adds deterministic alert filtering, prioritization, deduplication, and alert-history idempotency.
@@ -28,8 +28,17 @@ The project is **not** a legal, financial, automated participation, or automated
 - R4G.6 adds a read-only runtime health command that reports the latest recurring lifecycle state, last successful run age, and a deterministic `HEALTHY` / `STALE` / `UNHEALTHY` classification.
 - R4G.6.1 hardens health semantics with separate `STARTED` run-duration checks, finite positive threshold validation, and fail-closed handling for unknown lifecycle states.
 - R4G.6.2 adds runtime build provenance: `--version` prints the application version and short Git build identity, while generated report summaries persist both `radar_version` and `build_identity`.
+- R4H.1 adds structured detail-unavailable failure diagnostics so transport, identity, status, deadline, and source-resolution failures are distinguishable without exposing raw exception text.
+- R4H.2 uses native Windows certificate trust for production EIS requests while preserving ordinary Requests verification on non-Windows platforms; insecure TLS bypasses remain prohibited.
+- R4H.3 recovers stale or invalid detail sources through bounded source resolution while preserving 44-FZ / 223-FZ source-family safety.
+- R4H.4 hardens exact-search semantics so a recognized exact-number search page with no matching result can be distinguished from an unrecognized or temporarily unavailable search response.
+- R4H.5 persists live-validated last-known-good detail URLs across runs and reuses them only through fresh live retrieval and identity/detail verification.
+- R4H.6 adds one bounded retry for a previously proven canonical source when the same source transiently fails, without adding retries for unproven direct URLs.
+- R4H.6.1 preserves proven-canonical retry diagnostics through later recovery or final failure so production evidence shows the complete fallback chain.
+- R4H.7 degrades same-run `NOT_FOUND_CONFIRMED` to `PROVEN_SOURCE_TEMPORARILY_UNAVAILABLE` when recent live proof exists, while keeping the candidate only as `DETAIL_UNAVAILABLE` rather than falsely upgrading it to `VERIFIED_OPEN`.
 - Telegram end-to-end delivery has been validated through a controlled live run from EIS discovery through alert delivery.
 - Windows Startup deployment has been validated by an actual reboot/login: Windows started the hidden background loop automatically, the loop recovered the previous-session lock, executed Radar successfully, and remained alive for the next three-hour cycle.
+- R4H was production-validated on live EIS runs: previously proven canonical URLs could return repeated HTTP 404 responses while later resolver attempts sometimes recovered the same procurement live; the final model therefore records recent-proof temporary unavailability instead of treating one unstable run as durable source disappearance.
 
 ## Production entry points
 
@@ -93,11 +102,13 @@ The current verification contract is:
 
 This prevents an HTTP 200 page with missing/irrelevant content from becoming `VERIFIED_OPEN` by reusing the original card evidence.
 
+R4H extends the unavailable-evidence contract across recurring live runs. A source URL is remembered only after successful live validation; later reuse is always a fresh HTTP fetch and must pass the same procurement-identity and detail checks. If a recently proven source and bounded recovery both fail in an unstable EIS cycle, Radar returns `DETAIL_UNAVAILABLE` with `PROVEN_SOURCE_TEMPORARILY_UNAVAILABLE` and `DEGRADED_BY_RECENT_PROOF`. Historical proof therefore weakens an absence claim but never substitutes for live evidence of `VERIFIED_OPEN`.
+
 ## TLS source integrity
 
-Production EIS HTTP retrieval uses normal `requests` certificate verification. Production paths must not use `verify=False` or suppress `InsecureRequestWarning`.
+Production EIS HTTP retrieval uses normal certificate verification. On Windows, Radar integrates native system trust for Requests so EIS certificate-chain differences do not require an insecure bypass. Production paths must not use `verify=False`, `CERT_NONE`, or suppressed certificate warnings.
 
-TLS failures degrade to existing unavailable semantics rather than becoming evidence: detail verification becomes `DETAIL_UNAVAILABLE`, while source resolution remains temporarily unavailable. There is no insecure fallback to disabled certificate verification.
+TLS failures degrade to existing unavailable semantics rather than becoming evidence. There is no insecure fallback to disabled certificate verification.
 
 ## Windows Startup deployment
 
@@ -177,7 +188,7 @@ Tracked fixtures are synthetic/test-oriented and should not be replaced with rea
 .\.venv\Scripts\python.exe -m pytest -q
 ```
 
-The latest accepted local suite after evidence-contract, TLS, background-runner, Windows-CI, dependency-pinning, health-semantics, and build-provenance hardening is `245 passed`.
+The latest accepted local suite after R4H source-resilience hardening is `297 passed`.
 
 ## Known limitations
 
@@ -197,7 +208,7 @@ The latest accepted local suite after evidence-contract, TLS, background-runner,
 
 ## Development direction
 
-The current operational chain is validated from Windows login through Startup background execution, production preflight, recurring Radar execution, evidence-based state transitions, alert filtering, Telegram delivery, resilient lock recovery, cross-platform CI coverage, reproducible direct dependency installation, hardened read-only runtime health evaluation, and build provenance. The next product-facing work should return to parser/resilience improvements driven by real recurring runs, while independent watchdog signaling, branch protection, and transitive locking remain explicit follow-up controls.
+The operational chain is validated from Windows login through Startup background execution, production preflight, recurring Radar execution, evidence-based state transitions, alert filtering, Telegram delivery, resilient lock recovery, cross-platform CI coverage, reproducible direct dependency installation, hardened read-only runtime health evaluation, build provenance, native Windows TLS trust, bounded detail-source recovery, cross-run last-known-good persistence, proven-canonical retry observability, and conservative recent-proof absence semantics. The source-resilience line R4H is production-validated; future parser/resilience work should be driven by new live evidence rather than additional speculative retries. Independent watchdog signaling, branch protection, and transitive locking remain explicit follow-up controls.
 
 ## License
 
