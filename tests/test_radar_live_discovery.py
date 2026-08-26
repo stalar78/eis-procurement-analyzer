@@ -876,12 +876,50 @@ def test_proven_canonical_retry_failure_final_failure_preserves_metadata(monkeyp
 
     assert result["open_verification_status"] == "DETAIL_UNAVAILABLE"
     assert result["detail_source_strategy"] == "FAILED"
+    assert result["detail_failure_code"] == "PROVEN_SOURCE_TEMPORARILY_UNAVAILABLE"
+    assert result["detail_recent_proven_source"] is True
+    assert result["detail_absence_certainty"] == "DEGRADED_BY_RECENT_PROOF"
     assert result["detail_proven_canonical_retry_attempted"] is True
     assert result["detail_proven_canonical_retry_count"] == 1
     assert result["detail_proven_canonical_retry_outcome"] == "FAILED"
     assert result["detail_proven_canonical_retry_failure_code"] == "HTTP_ERROR"
     assert PROCUREMENT_NUMBER not in result["detail_source_url"]
     assert calls.count(canonical_url) == 3
+
+
+def test_different_recent_proven_source_downgrades_confirmed_not_found(monkeypatch, tmp_path) -> None:
+    db = tmp_path / "radar.db"
+    direct_url = "https://zakupki.gov.ru/223/purchase/direct.html?regNumber=" + PROCUREMENT_NUMBER
+    remembered_url = "https://zakupki.gov.ru/223/purchase/remembered.html?regNumber=" + PROCUREMENT_NUMBER
+    card = _verification_card()
+    card.source_url = direct_url
+    state = RadarState(db)
+    state.save_successful_source_url(
+        procurement_number=PROCUREMENT_NUMBER,
+        source_url=remembered_url,
+        fetched_at=datetime.now().astimezone().isoformat(timespec="seconds"),
+        latest_known_validation_status="VERIFIED_OPEN",
+    )
+    state.close()
+    calls = []
+
+    def fake_get(url: str, **_kwargs):
+        calls.append(url)
+        if "extendedsearch" in url:
+            return DetailResponse(200, '<html><form action="/epz/order/extendedsearch/results.html"><input name="searchString" value="other"></form></html>', url)
+        return DetailResponse(404, "<html>404 Not Found</html>", url)
+
+    monkeypatch.setattr(http, "get", fake_get)
+    state = RadarState(db)
+    result = verify_cards_from_detail([card], _as_of(), limit=1, state=state)[0]
+    state.close()
+
+    assert result["open_verification_status"] == "DETAIL_UNAVAILABLE"
+    assert result["detail_failure_code"] == "PROVEN_SOURCE_TEMPORARILY_UNAVAILABLE"
+    assert result["detail_recent_proven_source"] is True
+    assert result["detail_absence_certainty"] == "DEGRADED_BY_RECENT_PROOF"
+    assert "detail_proven_canonical_retry_attempted" not in result
+    assert all("/epz/order/notice/" not in url for url in calls)
 
 
 def test_unproven_direct_404_does_not_add_duplicate_same_url_retry(monkeypatch) -> None:
@@ -908,7 +946,58 @@ def test_unproven_direct_404_does_not_add_duplicate_same_url_retry(monkeypatch) 
     assert result["open_verification_status"] == "VERIFIED_OPEN"
     assert result["detail_source_resolution_status"] == "RESOLVED_SEARCH_RECOVERY"
     assert "detail_proven_canonical_retry_attempted" not in result
+    assert "detail_recent_proven_source" not in result
     assert calls.count(stale_url) == 2
+
+
+def test_unproven_confirmed_not_found_keeps_source_url_not_found(monkeypatch) -> None:
+    card = _verification_card()
+    card.source_url = "https://zakupki.gov.ru/epz/order/notice/stale/view/common-info.html?regNumber=" + PROCUREMENT_NUMBER
+
+    def fake_get(url: str, **_kwargs):
+        if "extendedsearch" in url:
+            return DetailResponse(200, '<html><form action="/epz/order/extendedsearch/results.html"><input name="searchString" value="other"></form></html>', url)
+        return DetailResponse(404, "<html>404 Not Found</html>", url)
+
+    monkeypatch.setattr(http, "get", fake_get)
+
+    result = verify_cards_from_detail([card], _as_of(), limit=1)[0]
+
+    assert result["open_verification_status"] == "DETAIL_UNAVAILABLE"
+    assert result["detail_failure_code"] == "SOURCE_URL_NOT_FOUND"
+    assert "detail_recent_proven_source" not in result
+    assert "detail_absence_certainty" not in result
+
+
+def test_stale_proven_source_does_not_downgrade_confirmed_not_found(monkeypatch, tmp_path) -> None:
+    db = tmp_path / "radar.db"
+    direct_url = "https://zakupki.gov.ru/epz/order/notice/stale/view/common-info.html?regNumber=" + PROCUREMENT_NUMBER
+    remembered_url = "https://zakupki.gov.ru/epz/order/notice/remembered/view/common-info.html?regNumber=" + PROCUREMENT_NUMBER
+    card = _verification_card()
+    card.source_url = direct_url
+    state = RadarState(db)
+    state.save_successful_source_url(
+        procurement_number=PROCUREMENT_NUMBER,
+        source_url=remembered_url,
+        fetched_at=(datetime.now().astimezone() - timedelta(hours=337)).isoformat(timespec="seconds"),
+        latest_known_validation_status="VERIFIED_OPEN",
+    )
+    state.close()
+
+    def fake_get(url: str, **_kwargs):
+        if "extendedsearch" in url:
+            return DetailResponse(200, '<html><form action="/epz/order/extendedsearch/results.html"><input name="searchString" value="other"></form></html>', url)
+        return DetailResponse(404, "<html>404 Not Found</html>", url)
+
+    monkeypatch.setattr(http, "get", fake_get)
+    state = RadarState(db)
+    result = verify_cards_from_detail([card], _as_of(), limit=1, state=state)[0]
+    state.close()
+
+    assert result["open_verification_status"] == "DETAIL_UNAVAILABLE"
+    assert result["detail_failure_code"] == "SOURCE_URL_NOT_FOUND"
+    assert "detail_recent_proven_source" not in result
+    assert "detail_absence_certainty" not in result
 
 
 def test_223_proven_canonical_retry_does_not_request_44fz(monkeypatch, tmp_path) -> None:
@@ -1074,7 +1163,8 @@ def test_last_known_good_identity_mismatch_fails_closed_and_continues_recovery(m
 
     assert result["open_verification_status"] == "DETAIL_UNAVAILABLE"
     assert result["detail_source_recovery_status"] == "FAILED"
-    assert result["detail_failure_code"] == "SOURCE_URL_NOT_FOUND"
+    assert result["detail_failure_code"] == "PROVEN_SOURCE_TEMPORARILY_UNAVAILABLE"
+    assert result["detail_recent_proven_source"] is True
 
 
 def test_stale_last_known_good_metadata_is_not_used_without_live_fetch(monkeypatch, tmp_path) -> None:

@@ -201,6 +201,13 @@ def _apply_proven_canonical_retry_metadata(row: dict[str, Any], metadata: dict[s
         row.update(metadata)
 
 
+def _apply_recent_proven_source_metadata(row: dict[str, Any], has_recent_proven_source: bool, absence_certainty: str = "") -> None:
+    if has_recent_proven_source:
+        row["detail_recent_proven_source"] = True
+    if absence_certainty:
+        row["detail_absence_certainty"] = absence_certainty
+
+
 def verify_cards_from_detail(cards: list[RadarCard], as_of: datetime, limit: int, state=None, remembered_source_max_age_hours: int = 336) -> list[dict[str, Any]]:
     from radar.source_resolution import (
         SourceResolutionPolicy,
@@ -289,15 +296,22 @@ def verify_cards_from_detail(cards: list[RadarCard], as_of: datetime, limit: int
             results.append(_public_verification_row(recovered_row))
             continue
         if recovery.result.status == "NOT_FOUND_CONFIRMED":
-            failure_code = "SOURCE_URL_NOT_FOUND"
+            if remembered_url:
+                failure_code = "PROVEN_SOURCE_TEMPORARILY_UNAVAILABLE"
+                absence_certainty = "DEGRADED_BY_RECENT_PROOF"
+            else:
+                failure_code = "SOURCE_URL_NOT_FOUND"
+                absence_certainty = ""
             failure_reason = "source recovery failed"
         elif direct_transient_failure:
             failure_code = direct_failure_code
             direct_reasons = row.get("open_verification_reasons") or []
             failure_reason = str(direct_reasons[0]) if direct_reasons else "source recovery failed"
+            absence_certainty = ""
         else:
             failure_code = "SOURCE_RECOVERY_FAILED"
             failure_reason = "source recovery failed"
+            absence_certainty = ""
         unavailable = unavailable_verification(card, failure_reason, as_of, failure_code).to_dict()
         unavailable["detail_source_url"] = _redact_detail_source_url(card.source_url)
         unavailable["detail_direct_http_status"] = row.get("detail_direct_http_status")
@@ -306,6 +320,7 @@ def verify_cards_from_detail(cards: list[RadarCard], as_of: datetime, limit: int
         unavailable["detail_source_resolution_status"] = recovery.result.status
         unavailable["detail_source_resolution_attempts"] = len(recovery.result.attempts)
         _apply_proven_canonical_retry_metadata(unavailable, proven_canonical_retry)
+        _apply_recent_proven_source_metadata(unavailable, bool(remembered_url), absence_certainty)
         results.append(unavailable)
     return results
 
