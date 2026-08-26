@@ -2,7 +2,7 @@ from datetime import datetime
 from pathlib import Path
 import json
 
-from radar.alerts import build_alert_feed
+from radar.alerts import NEW_PROCUREMENT_ALERT_REASON, alert_fingerprint, build_alert_feed
 from radar.config import RadarConfig
 from radar.discovery import normalize_card
 from radar.models import EligibilityStatus, RadarAssessment, RadarDecision
@@ -56,6 +56,32 @@ def test_new_priority_procurement_is_promoted() -> None:
         datetime.fromisoformat("2026-08-11T10:00:00+03:00"),
     )
     assert alerts and alerts[0]["alert_priority"] == "HIGH"
+    assert alerts[0]["alert_type"] == "INTERESTING_NEW_PROCUREMENT"
+    assert alerts[0]["reason"] == NEW_PROCUREMENT_ALERT_REASON
+    assert alerts[0]["score"] == 82
+    assert alerts[0]["radar_decision"] == "PRIORITY"
+
+
+def test_new_procurement_preserves_transition_values_and_fingerprint() -> None:
+    config = RadarConfig()
+    card = _card("32616324790")
+    assessment = _assessment(card, RadarDecision.REVIEW, 59)
+    event = {
+        "procurement_number": card.procurement_number,
+        "event_type": "NEW_PROCUREMENT",
+        "detected_at": "2026-08-11T10:00:00+03:00",
+        "previous_value": "",
+        "current_value": card.procurement_number,
+        "explanation": "procurement changed from '' to '32616324790'",
+    }
+    alerts = build_alert_feed([event], [card], [assessment], config, datetime.fromisoformat("2026-08-11T10:00:00+03:00"))
+
+    assert alerts[0]["reason"] == NEW_PROCUREMENT_ALERT_REASON
+    assert alerts[0]["previous_value"] == ""
+    assert alerts[0]["current_value"] == "32616324790"
+    assert alerts[0]["event_types"] == ["NEW_PROCUREMENT"]
+    assert alerts[0]["source_events"] == [event]
+    assert alerts[0]["fingerprint"] == alert_fingerprint(alerts[0])
 
 
 def test_noisy_event_is_suppressed() -> None:

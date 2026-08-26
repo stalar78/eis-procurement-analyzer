@@ -146,7 +146,7 @@ def format_alert_message(alert: dict[str, Any]) -> str:
     ]
     if alert.get("score") is not None or alert.get("radar_decision"):
         lines.append(f"Score/decision: {alert.get('score', '')} / {alert.get('radar_decision', '')}")
-    if alert.get("previous_value") or alert.get("current_value"):
+    if alert.get("alert_type") != "INTERESTING_NEW_PROCUREMENT" and (alert.get("previous_value") or alert.get("current_value")):
         lines.append(f"Change: {alert.get('previous_value', '')} -> {alert.get('current_value', '')}")
     return "\n".join(lines)
 

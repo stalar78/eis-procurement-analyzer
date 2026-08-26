@@ -14,6 +14,7 @@ from radar.prefilter import parse_datetime
 PRIORITY_ORDER = {"LOW": 1, "MEDIUM": 2, "HIGH": 3}
 INTERESTING_DECISIONS = {RadarDecision.PRIORITY.value, RadarDecision.REVIEW.value}
 OPPORTUNITY_LEVEL_ORDER = {"INSUFFICIENT_DATA": 0, "LOW": 1, "REVIEW": 2, "MEDIUM": 2, "HIGH": 3}
+NEW_PROCUREMENT_ALERT_REASON = "New procurement matched Radar criteria"
 
 
 @dataclass
@@ -93,7 +94,7 @@ def classify_event(
     if event_type == "NEW_PROCUREMENT":
         if assessment and (decision in INTERESTING_DECISIONS or assessment.total_score >= config.alerts.minimum_new_score):
             priority = "HIGH" if decision == RadarDecision.PRIORITY.value or assessment.total_score >= config.alerts.high_priority_score else "MEDIUM"
-            return _alert(event, "INTERESTING_NEW_PROCUREMENT", priority, reason, score, decision)
+            return _alert(event, "INTERESTING_NEW_PROCUREMENT", priority, NEW_PROCUREMENT_ALERT_REASON, score, decision)
         return None
     if event_type in {"PRELIMINARY_DECISION_CHANGED", "HISTORY_DECISION_CHANGED"} and current == RadarDecision.PRIORITY.value:
         return _alert(event, "DECISION_TO_PRIORITY", "HIGH", reason, score, decision)

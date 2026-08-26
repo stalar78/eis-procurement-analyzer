@@ -24,6 +24,44 @@ def _alert() -> dict[str, object]:
     }
 
 
+def test_new_procurement_message_omits_blank_change_line() -> None:
+    alert = {
+        "procurement_number": "32616324790",
+        "alert_type": "INTERESTING_NEW_PROCUREMENT",
+        "alert_priority": "MEDIUM",
+        "reason": "New procurement matched Radar criteria",
+        "previous_value": "",
+        "current_value": "32616324790",
+        "score": 59,
+        "radar_decision": "REVIEW",
+    }
+
+    message = format_alert_message(alert)
+
+    assert "Reason: New procurement matched Radar criteria" in message
+    assert "Score/decision: 59 / REVIEW" in message
+    assert "Change:" not in message
+    assert "changed from" not in message
+    assert "-> 32616324790" not in message
+
+
+def test_existing_change_alert_message_keeps_change_line() -> None:
+    alert = {
+        "procurement_number": "1",
+        "alert_type": "SIGNIFICANT_NMCK_CHANGE",
+        "alert_priority": "MEDIUM",
+        "reason": "nmck jump",
+        "previous_value": "1000000",
+        "current_value": "1400000",
+        "score": 60,
+        "radar_decision": "REVIEW",
+    }
+
+    message = format_alert_message(alert)
+
+    assert "Change: 1000000 -> 1400000" in message
+
+
 def test_successful_send_records_delivery(tmp_path: Path) -> None:
     config = RadarConfig().telegram
     config.enabled = True
