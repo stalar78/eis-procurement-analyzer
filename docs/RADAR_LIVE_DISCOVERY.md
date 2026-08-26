@@ -74,6 +74,34 @@ If provisional candidates existed but explicit negative verification rejects all
 
 A controlled live validation of R4F.3 observed 13 search cards with active raw status, future deadlines, and provisional-open eligibility. All 13 detail checks were temporarily unavailable. Under the degradation policy all 13 remained discovery candidates; before R4F.3 the same condition incorrectly reduced the final candidate set to zero.
 
+### R4H source-resilience policy
+
+R4H hardens detail verification against unstable EIS source URLs without weakening the evidence contract.
+
+The source chain now behaves conservatively:
+
+1. fetch the current direct source;
+2. if a different recent last-known-good source exists, live-fetch and validate it;
+3. if the current source itself is a recently proven canonical source and fails with a bounded transient condition such as `404`, request error, `429`, or selected `5xx`, perform one additional same-URL live retry;
+4. if live verification still fails, use the existing bounded exact-number / alternate source resolver;
+5. accept `VERIFIED_OPEN` only from live content that contains the expected procurement identity and passes the existing detail verification.
+
+Successful source URLs are remembered across runs only after live validation. Remembered metadata never becomes fresh evidence by itself.
+
+R4H.6.1 preserves retry diagnostics through later recovery or final failure. Production outputs can therefore distinguish whether a proven canonical retry was attempted, whether it succeeded, its safe failure code / HTTP status, and what the subsequent resolver did.
+
+R4H.7 changes absence certainty when recent proof exists. If a procurement has a recent live-validated source but the current direct/retry/recovery chain ends with `NOT_FOUND_CONFIRMED`, Radar keeps the result as `DETAIL_UNAVAILABLE` and records:
+
+- `detail_failure_code = PROVEN_SOURCE_TEMPORARILY_UNAVAILABLE`;
+- `detail_recent_proven_source = true`;
+- `detail_absence_certainty = DEGRADED_BY_RECENT_PROOF`.
+
+This does **not** make the procurement `VERIFIED_OPEN`. It only prevents one unstable EIS run from being treated as durable proof that a recently verified source disappeared.
+
+For procurements without recent proven source evidence, existing `SOURCE_URL_NOT_FOUND` semantics remain unchanged.
+
+Live production validation of R4H observed previously verified canonical URLs returning repeated HTTP `404` responses while a later bounded resolver attempt sometimes recovered the same procurement live in the same run. This is the operational evidence behind the degraded absence-certainty rule.
+
 ## Query budgets
 
 Live discovery is bounded. Configuration can limit:
@@ -105,11 +133,15 @@ Discovery reports preserve operational evidence including:
 - verified-open / verified-closed / verified-cancelled counts;
 - status/deadline conflicts;
 - `detail_unavailable`;
+- structured detail failure-code counts/examples;
+- source strategy / resolver status;
+- proven-canonical retry attempt/outcome fields when applicable;
+- recent-proven-source / degraded absence-certainty fields when applicable;
 - `detail_verification_skipped_due_to_limit`;
 - `detail_verification_rejected`;
 - parse warnings and failure codes.
 
-Sensitive session data and cookies are not part of diagnostics.
+Sensitive session data, raw exception text, raw HTML, and unredacted diagnostic source identifiers are not part of public diagnostics.
 
 ## Example
 
