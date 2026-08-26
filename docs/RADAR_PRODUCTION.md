@@ -6,7 +6,7 @@ R4E adds a stable production-style entry point for recurring EIS Procurement Rad
 
 Current R4E milestone label: `0.4.4-r4e-production-profile`.
 
-Current Radar application version: `0.5.0-r4g6-health-hardening`.
+Current Radar application version: `0.6.0-r4h-source-resilience`.
 
 The active workstation deployment now uses the current-user Windows Startup folder plus `scripts/radar-background-loop.ps1`; the earlier Task Scheduler path is deprecated and removed from the tracked deployment surface.
 
@@ -112,6 +112,16 @@ If Git is unavailable, times out, or no SHA can be resolved, build identity is r
 
 Generated report summaries preserve the existing `radar_version` field and also include `build_identity`, so stored output can be associated with a concrete code revision when Git metadata is available.
 
+The current R4H application label is `0.6.0-r4h-source-resilience`. R4H changes source/detail resilience while preserving the R4E production entry point, the R4G health command, and build-provenance behavior.
+
+## R4H production source behavior
+
+R4H production runs use native Windows certificate trust, bounded detail-source recovery, persisted last-known-good source locators, one bounded same-URL retry for a recently proven canonical source, and structured retry/recovery diagnostics.
+
+A remembered source never produces `VERIFIED_OPEN` from stored metadata alone. Every successful verification still requires a current live fetch containing the expected procurement identity and satisfying the existing status/deadline verification contract.
+
+If recent live proof exists but current direct/retry/recovery attempts end in `NOT_FOUND_CONFIRMED`, the result remains `DETAIL_UNAVAILABLE` and is classified as `PROVEN_SOURCE_TEMPORARILY_UNAVAILABLE` with degraded absence certainty. This prevents a single unstable EIS cycle from being treated as durable source disappearance while avoiding any cache-based false `VERIFIED_OPEN` result.
+
 ## Telegram credentials
 
 The production profile stores environment-variable names only:
@@ -185,7 +195,7 @@ Tests at that milestone covered:
 - fail-fast `--preflight-only` behavior;
 - working-directory-independent production config/runtime path resolution.
 
-Subsequent operational hardening has reached an accepted local suite of `245 passed` and added stricter detail evidence, TLS verification, behavioral Windows background-runner coverage, cross-platform CI coverage, pinned direct dependencies, hardened read-only runtime health evaluation, and runtime build provenance without changing the core R4E production entry point.
+Subsequent operational hardening has reached an accepted local suite of `297 passed`. The R4H source-resilience line was also validated with real production runs: stored live-proven canonical URLs were reused across cycles, same-URL proven retries were observed through structured diagnostics, repeated HTTP `404` responses were seen for recently verified sources, later resolver attempts sometimes recovered those procurements live, and unresolved recent-proof cases were correctly downgraded to `PROVEN_SOURCE_TEMPORARILY_UNAVAILABLE` rather than durable `SOURCE_URL_NOT_FOUND`.
 
 ## Scope boundary
 
