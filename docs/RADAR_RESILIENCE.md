@@ -56,6 +56,54 @@ This protects live discovery from transient EIS detail-page failures while prese
 
 A controlled live validation observed 13 provisionally-open candidates whose detail pages were all temporarily unavailable. R4F.3 correctly retained all 13 candidates and recorded the unavailable-verification diagnostics.
 
+## R4H source-resilience chain
+
+R4H extends resilience from single-run degradation to cross-run source evidence.
+
+### Structured failure diagnostics
+
+R4H.1 records deterministic detail failure codes rather than collapsing every problem into one generic unavailable state. Diagnostics distinguish missing source URL, request/HTTP failure, identity mismatch, missing detail status/deadline, source recovery failure, confirmed source absence, and later R4H temporary-proven-source semantics. Public diagnostics do not expose raw exception text or raw HTML.
+
+### Native Windows trust
+
+R4H.2 routes Windows production Requests through native system certificate trust. This fixed a production condition where ordinary Python Requests rejected the EIS chain while Windows-native tooling accepted it. The implementation does not use `verify=False`, `CERT_NONE`, global certificate-disable monkeypatches, or suppressed warnings.
+
+### Bounded source recovery
+
+R4H.3 performs bounded recovery after a missing/stale direct detail URL. Direct source validation remains first; exact-number search and alternate-section logic are bounded and preserve 44-FZ / 223-FZ source-family safety.
+
+R4H.4 hardens exact-search semantics. A recognized exact-search result page with no matching procurement link can produce `NOT_FOUND_CONFIRMED`; an unrecognized 200 response is treated as temporary/unrecognized evidence instead of absence.
+
+### Last-known-good persistence
+
+R4H.5 persists successful detail locators through the existing Radar SQLite state. A source becomes last-known-good only after a real live fetch contains the expected procurement identity and passes detail verification.
+
+Remembered metadata is a locator, not a cached truth statement. Every reuse is a fresh live request and must pass the same verification rules before `VERIFIED_OPEN` can be produced.
+
+The remembered source uses the existing freshness policy and does not introduce a second cache-age model.
+
+### Proven canonical retry
+
+R4H.6 recognizes the special case where the current direct source equals a recently proven last-known-good source. If the first live request fails with `404`, request error, `429`, or selected `5xx`, Radar performs exactly one additional same-URL live retry before continuing to the existing bounded resolver.
+
+No extra same-URL retry is added for an unproven direct URL. A different remembered source keeps the existing `LAST_KNOWN_GOOD` path.
+
+R4H.6.1 preserves safe structured retry metadata through later recovery or final failure, including whether retry was attempted, retry count, success/failure outcome, safe failure code, and HTTP status. This makes the complete production fallback chain observable even when a later resolver result becomes the final row.
+
+### Recent-proof absence certainty
+
+R4H.7 addresses a production-observed EIS behavior: a previously live-validated canonical URL can return repeated HTTP `404` responses, while a later resolver attempt in the same run may still recover the procurement live.
+
+Therefore, when recent last-known-good evidence exists and the entire current live chain ultimately ends in `NOT_FOUND_CONFIRMED`, Radar does not immediately expose that as durable `SOURCE_URL_NOT_FOUND`. The final verification remains fail-closed as `DETAIL_UNAVAILABLE`, with:
+
+- `detail_failure_code = PROVEN_SOURCE_TEMPORARILY_UNAVAILABLE`;
+- `detail_recent_proven_source = true`;
+- `detail_absence_certainty = DEGRADED_BY_RECENT_PROOF`.
+
+This is not cache-based verification. The procurement is **not** marked `VERIFIED_OPEN` unless current live content succeeds. Recent proof only reduces confidence in an absence conclusion produced during an unstable run.
+
+If no fresh proven source exists, the established `SOURCE_URL_NOT_FOUND` behavior remains unchanged.
+
 ## Last-known-good state
 
 Radar preserves useful source information across runs. A later transient failure should not erase a previously successful source URL or snapshot.
@@ -121,12 +169,19 @@ This keeps tests deterministic and prevents workstation credentials from alterin
 The resilience chain has been exercised beyond unit tests:
 
 - production preflight succeeded with Telegram enabled;
-- a controlled live discovery run completed with exit code `0` and no residual lock;
+- controlled live discovery runs completed with exit code `0` and no residual lock;
 - detail-verification degradation retained provisionally-open candidates during temporary detail-page unavailability;
+- native Windows TLS trust eliminated the Python-only certificate-chain failure without disabling verification;
+- source recovery converted stale direct URLs into live canonical detail sources when EIS exposed them;
+- cross-run last-known-good source persistence was confirmed in the production SQLite state;
+- production runs demonstrated previously proven canonical URLs returning repeated HTTP `404` responses;
+- proven-canonical retry execution and outcome were observed through structured R4H.6.1 diagnostics;
+- later resolver attempts recovered some procurements live after failed proven-canonical retries, demonstrating that same-run `404` / no-match can be transient;
+- R4H.7 production validation correctly classified recent-proof unresolved cases as `PROVEN_SOURCE_TEMPORARILY_UNAVAILABLE` rather than `SOURCE_URL_NOT_FOUND`;
 - live Telegram end-to-end delivery succeeded through the real alert pipeline;
-- a Windows Task Scheduler manual run completed with result code `0` and released `radar.lock`.
+- Windows Startup deployment was validated by reboot/login and continued three-hour background cycles.
 
-The accepted local suite at the R4F.3 milestone is `193 passed`.
+The accepted local suite at the R4H milestone is `297 passed`.
 
 ## Repository safety
 
