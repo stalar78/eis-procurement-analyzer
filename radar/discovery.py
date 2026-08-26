@@ -196,6 +196,11 @@ def _public_verification_row(row: dict[str, Any]) -> dict[str, Any]:
     return public_row
 
 
+def _apply_proven_canonical_retry_metadata(row: dict[str, Any], metadata: dict[str, Any]) -> None:
+    if metadata:
+        row.update(metadata)
+
+
 def verify_cards_from_detail(cards: list[RadarCard], as_of: datetime, limit: int, state=None, remembered_source_max_age_hours: int = 336) -> list[dict[str, Any]]:
     from radar.source_resolution import (
         SourceResolutionPolicy,
@@ -226,9 +231,18 @@ def verify_cards_from_detail(cards: list[RadarCard], as_of: datetime, limit: int
         direct_transient_failure = direct_failure_code == "REQUEST_ERROR" or (
             direct_failure_code == "HTTP_ERROR" and direct_http_status in {429, 500, 502, 503, 504}
         )
+        proven_canonical_retry: dict[str, Any] = {}
         if remembered_url == card.source_url:
             retry_row, _retry_should_recover = _fetch_detail_url(card, as_of, card.source_url, "PROVEN_CANONICAL_RETRY")
-            retry_row["detail_proven_canonical_retry_count"] = 1
+            retry_outcome = "SUCCESS" if retry_row.get("open_verification_status") != "DETAIL_UNAVAILABLE" else "FAILED"
+            proven_canonical_retry = {
+                "detail_proven_canonical_retry_attempted": True,
+                "detail_proven_canonical_retry_count": 1,
+                "detail_proven_canonical_retry_outcome": retry_outcome,
+                "detail_proven_canonical_retry_failure_code": retry_row.get("detail_failure_code") or "",
+                "detail_proven_canonical_retry_http_status": retry_row.get("detail_direct_http_status"),
+            }
+            _apply_proven_canonical_retry_metadata(retry_row, proven_canonical_retry)
             if retry_row.get("_detail_last_known_good_url"):
                 retry_row["detail_last_known_good_url"] = _redact_detail_source_url(str(retry_row["_detail_last_known_good_url"]))
             if retry_row.get("open_verification_status") != "DETAIL_UNAVAILABLE":
@@ -270,6 +284,7 @@ def verify_cards_from_detail(cards: list[RadarCard], as_of: datetime, limit: int
             recovered_row["detail_source_resolution_attempts"] = len(recovery.result.attempts)
             if recovered_row.get("_detail_last_known_good_url"):
                 recovered_row["detail_last_known_good_url"] = _redact_detail_source_url(str(recovered_row["_detail_last_known_good_url"]))
+            _apply_proven_canonical_retry_metadata(recovered_row, proven_canonical_retry)
             _persist_last_known_good(state, recovered_row, as_of)
             results.append(_public_verification_row(recovered_row))
             continue
@@ -290,6 +305,7 @@ def verify_cards_from_detail(cards: list[RadarCard], as_of: datetime, limit: int
         unavailable["detail_source_strategy"] = "FAILED"
         unavailable["detail_source_resolution_status"] = recovery.result.status
         unavailable["detail_source_resolution_attempts"] = len(recovery.result.attempts)
+        _apply_proven_canonical_retry_metadata(unavailable, proven_canonical_retry)
         results.append(unavailable)
     return results
 

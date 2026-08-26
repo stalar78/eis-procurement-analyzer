@@ -550,6 +550,7 @@ def test_direct_request_exception_falls_through_to_last_known_good(monkeypatch, 
     assert result["open_verification_status"] == "VERIFIED_OPEN"
     assert result["detail_source_strategy"] == "LAST_KNOWN_GOOD"
     assert result["detail_source_recovery_status"] == "REUSED"
+    assert "detail_proven_canonical_retry_attempted" not in result
     assert calls == [stale_url, remembered_url]
 
 
@@ -729,7 +730,9 @@ def test_proven_canonical_404_retry_succeeds(monkeypatch, tmp_path) -> None:
     assert result["open_verification_status"] == "VERIFIED_OPEN"
     assert result["detail_source_strategy"] == "PROVEN_CANONICAL_RETRY"
     assert result["detail_source_recovery_status"] == "RETRIED"
+    assert result["detail_proven_canonical_retry_attempted"] is True
     assert result["detail_proven_canonical_retry_count"] == 1
+    assert result["detail_proven_canonical_retry_outcome"] == "SUCCESS"
     assert calls == [canonical_url, canonical_url]
 
 
@@ -763,6 +766,9 @@ def test_proven_canonical_request_exception_retry_succeeds(monkeypatch, tmp_path
 
     assert result["open_verification_status"] == "VERIFIED_OPEN"
     assert result["detail_source_strategy"] == "PROVEN_CANONICAL_RETRY"
+    assert result["detail_proven_canonical_retry_attempted"] is True
+    assert result["detail_proven_canonical_retry_count"] == 1
+    assert result["detail_proven_canonical_retry_outcome"] == "SUCCESS"
     assert calls == [canonical_url, canonical_url]
 
 
@@ -796,6 +802,9 @@ def test_proven_canonical_503_retry_succeeds(monkeypatch, tmp_path) -> None:
 
     assert result["open_verification_status"] == "VERIFIED_OPEN"
     assert result["detail_source_strategy"] == "PROVEN_CANONICAL_RETRY"
+    assert result["detail_proven_canonical_retry_attempted"] is True
+    assert result["detail_proven_canonical_retry_count"] == 1
+    assert result["detail_proven_canonical_retry_outcome"] == "SUCCESS"
     assert calls == [canonical_url, canonical_url]
 
 
@@ -832,8 +841,47 @@ def test_proven_canonical_retry_failure_falls_through_to_exact_search(monkeypatc
 
     assert result["open_verification_status"] == "VERIFIED_OPEN"
     assert result["detail_source_resolution_status"] == "RESOLVED_SEARCH_RECOVERY"
+    assert result["detail_proven_canonical_retry_attempted"] is True
+    assert result["detail_proven_canonical_retry_count"] == 1
+    assert result["detail_proven_canonical_retry_outcome"] == "FAILED"
     assert calls.count(canonical_url) == 3
     assert any("extendedsearch" in url for url in calls)
+
+
+def test_proven_canonical_retry_failure_final_failure_preserves_metadata(monkeypatch, tmp_path) -> None:
+    db = tmp_path / "radar.db"
+    canonical_url = "https://zakupki.gov.ru/epz/order/notice/stale/view/common-info.html?regNumber=" + PROCUREMENT_NUMBER
+    card = _verification_card()
+    card.source_url = canonical_url
+    state = RadarState(db)
+    state.save_successful_source_url(
+        procurement_number=PROCUREMENT_NUMBER,
+        source_url=canonical_url,
+        fetched_at=datetime.now().astimezone().isoformat(timespec="seconds"),
+        latest_known_validation_status="VERIFIED_OPEN",
+    )
+    state.close()
+    calls = []
+
+    def fake_get(url: str, **_kwargs):
+        calls.append(url)
+        if "extendedsearch" in url:
+            return DetailResponse(200, '<html><form action="/epz/order/extendedsearch/results.html"><input name="searchString" value="other"></form></html>', url)
+        return DetailResponse(404, "<html>404 Not Found</html>", url)
+
+    monkeypatch.setattr(http, "get", fake_get)
+    state = RadarState(db)
+    result = verify_cards_from_detail([card], _as_of(), limit=1, state=state)[0]
+    state.close()
+
+    assert result["open_verification_status"] == "DETAIL_UNAVAILABLE"
+    assert result["detail_source_strategy"] == "FAILED"
+    assert result["detail_proven_canonical_retry_attempted"] is True
+    assert result["detail_proven_canonical_retry_count"] == 1
+    assert result["detail_proven_canonical_retry_outcome"] == "FAILED"
+    assert result["detail_proven_canonical_retry_failure_code"] == "HTTP_ERROR"
+    assert PROCUREMENT_NUMBER not in result["detail_source_url"]
+    assert calls.count(canonical_url) == 3
 
 
 def test_unproven_direct_404_does_not_add_duplicate_same_url_retry(monkeypatch) -> None:
@@ -859,6 +907,7 @@ def test_unproven_direct_404_does_not_add_duplicate_same_url_retry(monkeypatch) 
 
     assert result["open_verification_status"] == "VERIFIED_OPEN"
     assert result["detail_source_resolution_status"] == "RESOLVED_SEARCH_RECOVERY"
+    assert "detail_proven_canonical_retry_attempted" not in result
     assert calls.count(stale_url) == 2
 
 
@@ -892,6 +941,8 @@ def test_223_proven_canonical_retry_does_not_request_44fz(monkeypatch, tmp_path)
 
     assert result["open_verification_status"] == "VERIFIED_OPEN"
     assert result["detail_source_strategy"] == "PROVEN_CANONICAL_RETRY"
+    assert result["detail_proven_canonical_retry_attempted"] is True
+    assert result["detail_proven_canonical_retry_outcome"] == "SUCCESS"
     assert all("/epz/order/notice/" not in url for url in calls)
 
 
@@ -932,6 +983,9 @@ def test_proven_canonical_identity_mismatch_retry_continues_recovery(monkeypatch
 
     assert result["open_verification_status"] == "VERIFIED_OPEN"
     assert result["detail_source_resolution_status"] == "RESOLVED_SEARCH_RECOVERY"
+    assert result["detail_proven_canonical_retry_attempted"] is True
+    assert result["detail_proven_canonical_retry_count"] == 1
+    assert result["detail_proven_canonical_retry_outcome"] == "FAILED"
     assert any("extendedsearch" in url for url in calls)
 
 
