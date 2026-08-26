@@ -45,6 +45,8 @@ Radar writes local structured outputs under the configured output directory. Dep
 - result/protocol extraction diagnostics
 - competition metric evidence and samples
 
+Generated summary records include the application `radar_version` and the short Git `build_identity` when repository metadata is available, allowing a local run artifact to be associated with the code revision that produced it.
+
 ## Transactional publication
 
 Real Radar runs are published transactionally.
@@ -64,8 +66,15 @@ Discovery reporting can include:
 - filter fingerprints;
 - provisional-open counts;
 - detail-page verification results;
+- structured detail-unavailable failure-code counts/examples;
+- detail source strategy and resolution status;
+- redacted detail source/recovered/last-known-good identifiers where applicable;
+- proven-canonical retry attempted/count/outcome/failure-code/HTTP-status fields where applicable;
+- recent-proven-source and degraded absence-certainty fields where applicable;
 - deadline/status conflicts;
 - query/page/card budget usage.
+
+R4H keeps source diagnostics evidence-oriented. Public diagnostic rows may show safe structured states such as `PROVEN_CANONICAL_RETRY`, `PROVEN_SOURCE_TEMPORARILY_UNAVAILABLE`, and `DEGRADED_BY_RECENT_PROOF`, but they must not expose raw exception text, raw HTML, credentials, or unredacted sensitive source identifiers.
 
 These files are operational diagnostics, not public examples.
 
@@ -129,6 +138,8 @@ Missing or unresolved values are expected. They must not be replaced with guesse
 
 Important values should remain traceable to accepted source evidence, with conflicts, partial extraction, and unavailable documents reported explicitly.
 
+Recent stored source evidence may reduce confidence in a same-run absence conclusion, but it never substitutes for a current live verification. In particular, `PROVEN_SOURCE_TEMPORARILY_UNAVAILABLE` remains a `DETAIL_UNAVAILABLE` outcome, not `VERIFIED_OPEN`.
+
 ## Decision fields
 
 Depending on the stage, reports may expose:
@@ -166,6 +177,6 @@ The earlier audited local analyzer artifacts confirmed:
 - 125 downloaded documents;
 - at least one analyzed case requiring manual review because of an extreme price reduction.
 
-Later Radar development validated historical analog/result extraction on bounded real public-source runs, but the real run artifacts themselves remain local and are not published in the repository.
+Later Radar development validated historical analog/result extraction and R4H source-resilience behavior on bounded real public-source runs, but the real run artifacts themselves remain local and are not published in the repository.
 
 Project claims should continue to distinguish capability demonstrations from statistically representative market conclusions.
